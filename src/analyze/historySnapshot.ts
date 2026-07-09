@@ -177,9 +177,15 @@ export function readHistory(filePath: string): DailySnapshot[] {
   return out;
 }
 
+export function mergeHistory(existing: DailySnapshot[], current: DailySnapshot[]): DailySnapshot[] {
+  const byDate = new Map(existing.map((s) => [s.date, s]));
+  for (const s of current) byDate.set(s.date, s);
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
 export function writeHistory(filePath: string, snapshots: DailySnapshot[]): void {
   if (!snapshots.length && existsSync(filePath)) return;
-  const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
+  const sorted = mergeHistory(readHistory(filePath), snapshots);
 
   const dir = dirname(filePath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });

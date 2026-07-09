@@ -18,7 +18,7 @@ import { buildContextAttribution } from "./analyze/contextAttribution.js";
 import { collectClaudeMdSizes } from "./analyze/claudemd.js";
 import { defaultCodexRoot, findCodexFiles, scanCodex } from "./codex/scan.js";
 import { computeRateLimitTrends, defaultSidecarLogPath, parseSidecarLog } from "./analyze/rateLimitHistory.js";
-import { buildAllDailySnapshots, defaultHistoryPath, toCsv, writeHistory } from "./analyze/historySnapshot.js";
+import { buildAllDailySnapshots, defaultHistoryPath, readHistory, toCsv, writeHistory } from "./analyze/historySnapshot.js";
 import { collectAssistant, collectCompaction, resolveChronological, sessionKey, type PendingSessionData } from "./analyze/resolve.js";
 import { defaultProjectsRoot, findSessionFiles } from "./jsonl/walker.js";
 import { readRecords } from "./jsonl/parser.js";
@@ -121,9 +121,10 @@ async function main(): Promise<void> {
   const rateLimitTrends = computeRateLimitTrends(parseSidecarLog(defaultSidecarLogPath()));
   const report = buildJsonReport(state, quota, rateLimitTrends, attribution, codex);
 
-  const history = buildAllDailySnapshots(state);
+  let history = buildAllDailySnapshots(state);
   if (!minTs) {
     writeHistory(defaultHistoryPath(), history);
+    history = readHistory(defaultHistoryPath());
   }
 
   if (csvOutPath) {

@@ -248,6 +248,48 @@ test("consecutive identical last_token_usage events are counted once", async () 
   assert.equal(state.totalInput, 500);
   assert.equal(state.totalOutput, 20);
 });
+test("duplicate token_count across rollout boundary for the same session counts once", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ccu-codex-boundary-"));
+  const evt = { type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 1000 }, last_token_usage: { input_tokens: 1000, output_tokens: 20 } } } };
+  const fileA = join(dir, "rollout-a.jsonl");
+  const fileB = join(dir, "rollout-b.jsonl");
+  writeFileSync(fileA, [
+    { timestamp: "2026-07-01T00:00:00.000Z", type: "session_meta", payload: { id: "bd1", cwd: "/r" } },
+    { timestamp: "2026-07-01T00:01:00.000Z", ...evt },
+  ].map((l) => JSON.stringify(l)).join("\n") + "\n");
+  writeFileSync(fileB, [
+    { timestamp: "2026-07-01T01:00:00.000Z", type: "session_meta", payload: { id: "bd1", cwd: "/r" } },
+    { timestamp: "2026-07-01T01:00:01.000Z", ...evt },
+  ].map((l) => JSON.stringify(l)).join("\n") + "\n");
+  const state = await scanCodex([fileA, fileB]);
+  assert.ok(state);
+  assert.equal(state.totalInput, 1000);
+  assert.equal(state.totalOutput, 20);
+});
+
+test("--since preserves session identity for cutoff-spanning sessions while excluding pre-window usage", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ccu-codex-span-"));
+  const file = join(dir, "rollout-span.jsonl");
+  writeFileSync(file, [
+    { timestamp: "2026-06-01T00:00:00.000Z", type: "session_meta", payload: { id: "span1", cwd: "/repo/span", originator: "codex_exec" } },
+    { timestamp: "2026-06-01T00:01:00.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 500 }, last_token_usage: { input_tokens: 500, output_tokens: 5 } } } },
+    { timestamp: "2026-07-01T00:00:00.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 600 }, last_token_usage: { input_tokens: 100, output_tokens: 10 } } } },
+  ].map((l) => JSON.stringify(l)).join("\n") + "\n");
+  const state = await scanCodex([file], Date.parse("2026-06-15T00:00:00.000Z"));
+  assert.ok(state);
+  assert.equal(state.sessions, 1);
+  assert.ok(state.cwdSessions.has("/repo/span"));
+  assert.equal(state.totalInput, 100);
+  assert.equal(state.totalOutput, 10);
+});
+
+test("mergeHistory preserves old days a partial rescan no longer sees, current scan wins on overlap", async () => {
+  const { mergeHistory } = await import("../src/analyze/historySnapshot.js");
+  const day = (date: string, out: number) => ({ date, ts: `${date}T23:59:59.999Z`, sessionsScanned: 1, totalInput: 0, totalOutput: out, totalCacheRead: 0, totalCacheCreation: 0, cacheHitRate: 0, toolErrorRate: 0, worstToolFrictionRate: 0, compactionMedianRetained: 0, turnDurationMedianMs: 0, agentToolCalls: 0, bashShare: 0, queueEnqueueCount: 0 });
+  const merged = mergeHistory([day("2026-01-01", 1), day("2026-06-01", 2)], [day("2026-06-01", 99), day("2026-07-01", 3)]);
+  assert.deepEqual(merged.map((s) => [s.date, s.totalOutput]), [["2026-01-01", 1], ["2026-06-01", 99], ["2026-07-01", 3]]);
+});
+
 test("writeHistory refuses to replace an existing history file with an empty snapshot set", async () => {
   const { writeHistory, readHistory } = await import("../src/analyze/historySnapshot.js");
   const dir = mkdtempSync(join(tmpdir(), "ccu-hist-"));

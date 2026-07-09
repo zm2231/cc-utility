@@ -55,7 +55,7 @@ export function renderReport(
   console.log(`    Cache reads:         ${fmt(state.totalCacheRead)}`);
   console.log(`    Cache writes:        ${fmt(state.totalCacheCreation)}`);
   console.log(`    Output tokens:       ${fmt(state.totalOutput)}`);
-  if (hitRate < 0.9 && state.totalCacheRead + state.totalInput > 0) {
+  if (hitRate < 0.9 && state.totalCacheRead + state.totalInput + state.totalCacheCreation > 0) {
     console.log(kleur.yellow(`    ⚠ Cache hit rate below 90%, check for early-context churn (dynamic content near the top of your prompt/CLAUDE.md invalidates the cached prefix downstream).`));
   }
   console.log();

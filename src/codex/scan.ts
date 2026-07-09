@@ -131,11 +131,11 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
   const state = createCodexState();
   const hourlySamples = new Map<number, CodexRateLimitSample>();
   const sessionIds = new Set<string>();
+  const prevTurnKeyBySession = new Map<string, string>();
 
   for (const file of files) {
     let sessionId = file;
     let lastContextFill: number | null = null;
-    let prevTurnKey = "";
 
     for await (const raw of readRecords(file)) {
       const rec = raw as CodexRecord;
@@ -143,7 +143,7 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
       const inWindow = !minTs || Number.isNaN(ts) || ts >= minTs;
       const p = rec.payload;
       if (!p) continue;
-      if (!inWindow && p.type !== "token_count") continue;
+      if (!inWindow && rec.type !== "session_meta" && p.type !== "token_count") continue;
       if (inWindow && !Number.isNaN(ts)) {
         if (state.firstTs === null || ts < state.firstTs) state.firstTs = ts;
         if (state.lastTs === null || ts > state.lastTs) state.lastTs = ts;
@@ -199,8 +199,8 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
               reasoning: safeNum(turn.reasoning_output_tokens),
             };
             const key = `${t.input}|${t.cached}|${t.output}|${t.reasoning}`;
-            const isRepeat = key === prevTurnKey;
-            prevTurnKey = key;
+            const isRepeat = key === prevTurnKeyBySession.get(sessionId);
+            prevTurnKeyBySession.set(sessionId, key);
             if (inWindow && !isRepeat) {
               state.totalInput += t.input;
               state.totalCachedInput += t.cached;
@@ -282,6 +282,7 @@ export function buildCodexReport(state: CodexState) {
       sessionsMeasured: state.contextWindowFillRatios.length,
       medianEndOfSessionFill: percentile(state.contextWindowFillRatios, 0.5),
       p90EndOfSessionFill: percentile(state.contextWindowFillRatios, 0.9),
+      note: "Fill = the final turn's full prompt (last_token_usage.input_tokens, the live context re-sent on that call) over model_context_window. Cumulative session input counts the context once per turn and would exceed 100%.",
     },
     rateLimits: {
       samples: state.rateLimitSamples.length,
