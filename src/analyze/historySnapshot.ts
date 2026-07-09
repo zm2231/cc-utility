@@ -128,7 +128,7 @@ export function buildRecentWindowRollup(state: AnalysisState, windowDays = 30): 
     }
   }
 
-  const denom = totalCacheRead + totalInput;
+  const denom = totalCacheRead + totalInput + totalCacheCreation;
   const toolFriction = [...perTool.entries()]
     .filter(([, s]) => s.results >= MIN_WINDOW_TOOL_RESULTS_FOR_FRICTION)
     .map(([tool, s]) => ({ tool, results: s.results, errors: s.errors, errorRate: s.errors / s.results, lastSeenDate: s.lastSeenDate }))

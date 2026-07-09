@@ -122,7 +122,9 @@ async function main(): Promise<void> {
   const report = buildJsonReport(state, quota, rateLimitTrends, attribution, codex);
 
   const history = buildAllDailySnapshots(state);
-  writeHistory(defaultHistoryPath(), history);
+  if (!minTs) {
+    writeHistory(defaultHistoryPath(), history);
+  }
 
   if (csvOutPath) {
     writeFileSync(csvOutPath, toCsv(history));

@@ -10,6 +10,8 @@ import { processTokens, overallCacheHitRate } from "../src/analyze/tokens.js";
 import { processTools } from "../src/analyze/tools.js";
 import { processPrompt } from "../src/analyze/prompts.js";
 import { scanCodex } from "../src/codex/scan.js";
+import { buildRecentWindowRollup } from "../src/analyze/historySnapshot.js";
+import { getDayBucket } from "../src/analyze/state.js";
 
 test("hook attachments aggregate durations and flag timeouts; user-Esc cancels excluded", () => {
   const state = createState();
@@ -115,6 +117,17 @@ test("user records without toolDenialKind are not counted as denials", () => {
   assert.equal(state.denialEvents.length, 0);
 });
 
+test("recent-window cache hit rate counts cache writes as misses", () => {
+  const state = createState();
+  const bucket = getDayBucket(state, "2026-07-01");
+  bucket.totalCacheRead = 800;
+  bucket.totalInput = 100;
+  bucket.totalCacheCreation = 100;
+  const window = buildRecentWindowRollup(state, 30);
+  assert.ok(window);
+  assert.equal(window.cacheHitRate, 0.8);
+});
+
 test("cache hit rate counts cache writes as misses", () => {
   const state = createState();
   processTokens(
@@ -213,4 +226,55 @@ test("scanCodex aggregates session meta, models, tools, exec heads, final usage,
 
 test("scanCodex returns null for an empty file list", async () => {
   assert.equal(await scanCodex([]), null);
+});
+
+test("resumed Codex sessions across files count once and take max cumulative totals, not the sum", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ccu-codex-resume-"));
+  const fileA = join(dir, "rollout-a.jsonl");
+  const fileB = join(dir, "rollout-b.jsonl");
+  writeFileSync(
+    fileA,
+    [
+      { timestamp: "2026-07-01T00:00:00.000Z", type: "session_meta", payload: { id: "s1", cwd: "/r" } },
+      { timestamp: "2026-07-01T00:01:00.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 100, cached_input_tokens: 50, output_tokens: 10, reasoning_output_tokens: 1 }, last_token_usage: { input_tokens: 100 }, model_context_window: 1000 } } },
+    ]
+      .map((l) => JSON.stringify(l))
+      .join("\n") + "\n",
+  );
+  writeFileSync(
+    fileB,
+    [
+      { timestamp: "2026-07-01T01:00:00.000Z", type: "session_meta", payload: { id: "s1", cwd: "/r" } },
+      { timestamp: "2026-07-01T01:01:00.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 150, cached_input_tokens: 80, output_tokens: 25, reasoning_output_tokens: 2 }, last_token_usage: { input_tokens: 400 }, model_context_window: 1000 } } },
+    ]
+      .map((l) => JSON.stringify(l))
+      .join("\n") + "\n",
+  );
+  const state = await scanCodex([fileA, fileB]);
+  assert.ok(state);
+  assert.equal(state.sessions, 1);
+  assert.equal(state.totalInput, 150);
+  assert.equal(state.totalOutput, 25);
+  assert.equal(state.contextWindowFillRatios.length, 1);
+  assert.ok(Math.abs(state.contextWindowFillRatios[0] - 0.4) < 1e-9);
+});
+
+test("rate-limit hourly downsampling keeps the latest-by-timestamp sample and peaks survive downsampling", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ccu-codex-rl-"));
+  const fileLate = join(dir, "a-late.jsonl");
+  const fileEarly = join(dir, "b-early.jsonl");
+  writeFileSync(
+    fileLate,
+    JSON.stringify({ timestamp: "2026-07-01T05:30:00.000Z", type: "event_msg", payload: { type: "token_count", info: {}, rate_limits: { primary: { used_percent: 10 }, secondary: { used_percent: 20 } } } }) + "\n",
+  );
+  writeFileSync(
+    fileEarly,
+    JSON.stringify({ timestamp: "2026-07-01T05:10:00.000Z", type: "event_msg", payload: { type: "token_count", info: {}, rate_limits: { primary: { used_percent: 90 }, secondary: { used_percent: 95 } } } }) + "\n",
+  );
+  const state = await scanCodex([fileLate, fileEarly]);
+  assert.ok(state);
+  assert.equal(state.rateLimitSamples.length, 1);
+  assert.equal(state.rateLimitSamples[0].primaryPct, 10);
+  assert.equal(state.peakPrimaryPct, 90);
+  assert.equal(state.peakSecondaryPct, 95);
 });

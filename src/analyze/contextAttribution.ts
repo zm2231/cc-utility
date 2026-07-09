@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { AnalysisState } from "./state.js";
 
 export interface AttributionItem {
@@ -90,13 +90,34 @@ export function buildContextAttribution(state: AnalysisState, contextWindow = 20
   const home = homedir();
   const items: AttributionItem[] = [];
 
-  let claudeMdTotal = 0;
-  for (const tokens of state.claudeMdSizes.values()) claudeMdTotal += tokens;
+  const globalClaudeMd = state.claudeMdSizes.get(join(home, ".claude", "CLAUDE.md")) ?? 0;
   items.push({
-    component: "CLAUDE.md files",
-    detail: `${state.claudeMdSizes.size} file(s) discovered from session cwds; per-session cost is the subset that loads for that project`,
-    estTokens: claudeMdTotal,
-    count: state.claudeMdSizes.size,
+    component: "Global CLAUDE.md (every session)",
+    detail: "~/.claude/CLAUDE.md loads in every project",
+    estTokens: globalClaudeMd,
+    count: globalClaudeMd ? 1 : 0,
+  });
+
+  const perProjectTotals: number[] = [];
+  for (const cwd of state.cwdsSeen) {
+    let total = 0;
+    let dir = cwd;
+    let prev = "";
+    while (dir !== prev) {
+      total += state.claudeMdSizes.get(join(dir, "CLAUDE.md")) ?? 0;
+      prev = dir;
+      dir = dirname(dir);
+    }
+    if (total > 0) perProjectTotals.push(total);
+  }
+  perProjectTotals.sort((a, b) => a - b);
+  const medianProject = perProjectTotals.length ? perProjectTotals[Math.floor(perProjectTotals.length / 2)] : 0;
+  const maxProject = perProjectTotals.length ? perProjectTotals[perProjectTotals.length - 1] : 0;
+  items.push({
+    component: "Project CLAUDE.md (typical session)",
+    detail: `median across ${perProjectTotals.length} project(s) with a CLAUDE.md; heaviest project loads ~${maxProject.toLocaleString("en-US")} tok`,
+    estTokens: medianProject,
+    count: perProjectTotals.length,
   });
 
   const skillDirs = [join(home, ".claude", "skills")];
@@ -147,6 +168,6 @@ export function buildContextAttribution(state: AnalysisState, contextWindow = 20
   return {
     items: items.sort((a, b) => b.estTokens - a.estTokens),
     skillListingBudgetTokens: Math.round(contextWindow * 0.01),
-    note: "Disk-based estimates (chars/4) of what loads before turn one; compare against measured firstTurnContext.",
+    note: "Disk-based estimates (chars/4) of what a typical session loads before turn one; compare against measured firstTurnContext.",
   };
 }

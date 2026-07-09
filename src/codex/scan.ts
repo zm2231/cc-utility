@@ -73,6 +73,8 @@ export interface CodexState {
   turnsStarted: number;
   turnsCompleted: number;
   rateLimitSamples: CodexRateLimitSample[];
+  peakPrimaryPct: number;
+  peakSecondaryPct: number;
   planTypes: Map<string, number>;
   contextWindowFillRatios: number[];
   firstTs: number | null;
@@ -98,6 +100,8 @@ function createCodexState(): CodexState {
     turnsStarted: 0,
     turnsCompleted: 0,
     rateLimitSamples: [],
+    peakPrimaryPct: 0,
+    peakSecondaryPct: 0,
     planTypes: new Map(),
     contextWindowFillRatios: [],
     firstTs: null,
@@ -123,11 +127,18 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
   const state = createCodexState();
   const hourlySamples = new Map<number, CodexRateLimitSample>();
   const sessionIds = new Set<string>();
+  interface SessionAgg {
+    usage: { input: number; cached: number; output: number; reasoning: number };
+    fill: number | null;
+    fillTs: number;
+  }
+  const perSession = new Map<string, SessionAgg>();
 
   for (const file of files) {
     let sessionId = file;
     let lastUsage: { input: number; cached: number; output: number; reasoning: number } | null = null;
     let lastContextFill: number | null = null;
+    let lastRecordTs = 0;
 
     for await (const raw of readRecords(file)) {
       const rec = raw as CodexRecord;
@@ -136,6 +147,7 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
       if (!Number.isNaN(ts)) {
         if (state.firstTs === null || ts < state.firstTs) state.firstTs = ts;
         if (state.lastTs === null || ts > state.lastTs) state.lastTs = ts;
+        lastRecordTs = Math.max(lastRecordTs, ts);
       }
       const p = rec.payload;
       if (!p) continue;
@@ -197,12 +209,15 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
           }
           const rl = p.rate_limits;
           if (rl && !Number.isNaN(ts)) {
+            const primaryPct = typeof rl.primary?.used_percent === "number" ? rl.primary.used_percent : null;
+            const secondaryPct = typeof rl.secondary?.used_percent === "number" ? rl.secondary.used_percent : null;
+            if (primaryPct !== null) state.peakPrimaryPct = Math.max(state.peakPrimaryPct, primaryPct);
+            if (secondaryPct !== null) state.peakSecondaryPct = Math.max(state.peakSecondaryPct, secondaryPct);
             const hourKey = Math.floor(ts / RATE_LIMIT_SAMPLE_INTERVAL_MS);
-            hourlySamples.set(hourKey, {
-              ts,
-              primaryPct: typeof rl.primary?.used_percent === "number" ? rl.primary.used_percent : null,
-              secondaryPct: typeof rl.secondary?.used_percent === "number" ? rl.secondary.used_percent : null,
-            });
+            const existing = hourlySamples.get(hourKey);
+            if (!existing || ts >= existing.ts) {
+              hourlySamples.set(hourKey, { ts, primaryPct, secondaryPct });
+            }
             if (typeof rl.plan_type === "string" && rl.plan_type) bump(state.planTypes, rl.plan_type);
           }
         }
@@ -210,13 +225,29 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
     }
 
     if (lastUsage) {
-      state.totalInput += lastUsage.input;
-      state.totalCachedInput += lastUsage.cached;
-      state.totalOutput += lastUsage.output;
-      state.totalReasoningOutput += lastUsage.reasoning;
+      const agg = perSession.get(sessionId);
+      if (!agg) {
+        perSession.set(sessionId, { usage: lastUsage, fill: lastContextFill, fillTs: lastRecordTs });
+      } else {
+        agg.usage.input = Math.max(agg.usage.input, lastUsage.input);
+        agg.usage.cached = Math.max(agg.usage.cached, lastUsage.cached);
+        agg.usage.output = Math.max(agg.usage.output, lastUsage.output);
+        agg.usage.reasoning = Math.max(agg.usage.reasoning, lastUsage.reasoning);
+        if (lastContextFill !== null && lastRecordTs >= agg.fillTs) {
+          agg.fill = lastContextFill;
+          agg.fillTs = lastRecordTs;
+        }
+      }
     }
-    if (lastContextFill !== null) state.contextWindowFillRatios.push(lastContextFill);
     state.filesScanned += 1;
+  }
+
+  for (const agg of perSession.values()) {
+    state.totalInput += agg.usage.input;
+    state.totalCachedInput += agg.usage.cached;
+    state.totalOutput += agg.usage.output;
+    state.totalReasoningOutput += agg.usage.reasoning;
+    if (agg.fill !== null) state.contextWindowFillRatios.push(agg.fill);
   }
 
   state.rateLimitSamples = [...hourlySamples.values()].sort((a, b) => a.ts - b.ts);
@@ -268,8 +299,8 @@ export function buildCodexReport(state: CodexState) {
             secondaryPct: latestSample.secondaryPct,
           }
         : null,
-      peakPrimaryPct: state.rateLimitSamples.reduce((m, s) => Math.max(m, s.primaryPct ?? 0), 0),
-      peakSecondaryPct: state.rateLimitSamples.reduce((m, s) => Math.max(m, s.secondaryPct ?? 0), 0),
+      peakPrimaryPct: state.peakPrimaryPct,
+      peakSecondaryPct: state.peakSecondaryPct,
       series: state.rateLimitSamples,
     },
   };
