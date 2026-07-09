@@ -283,11 +283,17 @@ test("--since preserves session identity for cutoff-spanning sessions while excl
   assert.equal(state.totalOutput, 10);
 });
 
-test("mergeHistory preserves old days a partial rescan no longer sees, current scan wins on overlap", async () => {
+test("mergeHistory preserves old days a partial rescan no longer sees; fuller past days beat partial rescans; today always updates", async () => {
   const { mergeHistory } = await import("../src/analyze/historySnapshot.js");
   const day = (date: string, out: number) => ({ date, ts: `${date}T23:59:59.999Z`, sessionsScanned: 1, totalInput: 0, totalOutput: out, totalCacheRead: 0, totalCacheCreation: 0, cacheHitRate: 0, toolErrorRate: 0, worstToolFrictionRate: 0, compactionMedianRetained: 0, turnDurationMedianMs: 0, agentToolCalls: 0, bashShare: 0, queueEnqueueCount: 0 });
-  const merged = mergeHistory([day("2026-01-01", 1), day("2026-06-01", 2)], [day("2026-06-01", 99), day("2026-07-01", 3)]);
+  const merged = mergeHistory([day("2026-01-01", 1), day("2026-06-01", 2)], [day("2026-06-01", 99), day("2026-07-01", 3)], "2026-07-09");
   assert.deepEqual(merged.map((s) => [s.date, s.totalOutput]), [["2026-01-01", 1], ["2026-06-01", 99], ["2026-07-01", 3]]);
+
+  const shrunk = mergeHistory([day("2026-06-01", 100)], [day("2026-06-01", 10)], "2026-07-09");
+  assert.deepEqual(shrunk.map((s) => [s.date, s.totalOutput]), [["2026-06-01", 100]]);
+
+  const today = mergeHistory([day("2026-07-09", 100)], [day("2026-07-09", 10)], "2026-07-09");
+  assert.deepEqual(today.map((s) => [s.date, s.totalOutput]), [["2026-07-09", 10]]);
 });
 
 test("writeHistory refuses to replace an existing history file with an empty snapshot set", async () => {

@@ -194,7 +194,7 @@ export function renderReport(
     .sort((a, b) => b.errorRate - a.errorRate)
     .slice(0, 8);
   if (frictionRows.length) {
-    console.log(kleur.bold("  Tool friction by type") + kleur.dim(`  (min ${MIN_TOOL_RESULTS_FOR_FRICTION} results)`));
+    console.log(kleur.bold("  Tool friction by type") + kleur.dim(`  (lifetime error rates, min ${MIN_TOOL_RESULTS_FOR_FRICTION} results; findings flag the recent window at >=30%)`));
     for (const r of frictionRows) {
       console.log(`    ${r.tool.padEnd(28)} ${fmt(r.errors)}/${fmt(r.results)} (${pct(r.errorRate)})`);
     }

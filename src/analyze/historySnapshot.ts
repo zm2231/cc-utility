@@ -177,9 +177,18 @@ export function readHistory(filePath: string): DailySnapshot[] {
   return out;
 }
 
-export function mergeHistory(existing: DailySnapshot[], current: DailySnapshot[]): DailySnapshot[] {
+export function mergeHistory(
+  existing: DailySnapshot[],
+  current: DailySnapshot[],
+  todayKey = new Date().toISOString().slice(0, 10),
+): DailySnapshot[] {
+  const volume = (s: DailySnapshot) => s.totalInput + s.totalOutput + s.totalCacheRead + s.totalCacheCreation;
   const byDate = new Map(existing.map((s) => [s.date, s]));
-  for (const s of current) byDate.set(s.date, s);
+  for (const s of current) {
+    const prev = byDate.get(s.date);
+    if (prev && s.date !== todayKey && volume(prev) > volume(s)) continue;
+    byDate.set(s.date, s);
+  }
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 

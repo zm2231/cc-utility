@@ -111,7 +111,7 @@ function barList(rows,cap){
   var out=render(rows.slice(0,cap));
   if(rows.length>cap){
     var id='m'+Math.random().toString(36).slice(2);
-    out+='<div id="'+id+'" style="display:none">'+render(rows.slice(cap))+'</div><button class="more-btn" onclick="var d=document.getElementById(\\''+id+'\\');d.style.display=d.style.display?\\'\\':\\'none\\';this.textContent=d.style.display?\\'show '+(rows.length-cap)+' more\\':\\'show fewer\\'">show '+(rows.length-cap)+' more</button>';
+    out+='<div id="'+id+'" style="display:none">'+render(rows.slice(cap))+'</div><button class="more-btn" data-more="'+id+'" data-n="'+(rows.length-cap)+'">show '+(rows.length-cap)+' more</button>';
   }
   return out;
 }
@@ -126,7 +126,7 @@ function tableHtml(headers,rows,numeric,cap){
   var out='<table><thead>'+head+'</thead><tbody>'+render(rows.slice(0,cap))+'</tbody></table>';
   if(rows.length>cap){
     var id='t'+Math.random().toString(36).slice(2);
-    out+='<div id="'+id+'" style="display:none"><table><tbody>'+render(rows.slice(cap))+'</tbody></table></div><button class="more-btn" onclick="var d=document.getElementById(\\''+id+'\\');d.style.display=d.style.display?\\'\\':\\'none\\';this.textContent=d.style.display?\\'show '+(rows.length-cap)+' more\\':\\'show fewer\\'">show '+(rows.length-cap)+' more</button>';
+    out+='<div id="'+id+'" style="display:none"><table><tbody>'+render(rows.slice(cap))+'</tbody></table></div><button class="more-btn" data-more="'+id+'" data-n="'+(rows.length-cap)+'">show '+(rows.length-cap)+' more</button>';
   }
   return out;
 }
@@ -298,7 +298,7 @@ function viewHome(){
   var co=R.contextOverhead,q=R.officialQuota,cx=R.codex;
   var high=FINDINGS.filter(function(f){return f.severity==='high'}).slice(0,3);
   var alerts=high.map(function(f){return '<div class="alert"><span>'+esc(f.headline)+'</span><a class="go" href="#optimizations">details →</a></div>'}).join('');
-  var failing=R.toolFriction.filter(function(r){return r.errorRate>=0.25}).length;
+  var failing=R.toolFriction.filter(function(r){return r.errorRate>=0.3}).length;
   var slowHooks=R.hooks.rows.filter(function(r){return r.slow}).length;
   var health='Cache '+pct(R.tokens.cacheHitRate)+' · '+(failing?failing+' tools failing':'tools healthy')+' · '+(slowHooks?slowHooks+' slow hooks':'hooks healthy')+' · '+fmtN(R.compaction.staleContextSessions.length)+' stale live sessions';
   return '<h1>Your coding agents</h1><div class="meta">'+fmtN(R.sessionsScanned)+' Claude Code sessions'+(cx?' · '+fmtN(cx.sessions)+' Codex sessions':'')+' · generated '+esc(DATA.generatedAt)+' · 100% local</div>'
@@ -345,7 +345,7 @@ function viewClaude(){
   var tools=Object.entries(R.toolCalls).sort(function(a,b){return b[1]-a[1]}).map(function(e){return {label:shortTool(e[0]),value:fmtN(e[1]),share:e[1]}});
   var attr=R.contextAttribution;
   var attrRows=attr?attr.items.map(function(i){return {label:i.component,value:fmtC(i.estTokens)+' tok',share:i.estTokens}}):[];
-  var frictionRows=R.toolFriction.filter(function(r){return r.errorRate>=0.25}).map(function(r){return [shortTool(r.tool),(r.errorRate*100).toFixed(0)+'%',r.errors+'/'+r.results]});
+  var frictionRows=R.toolFriction.filter(function(r){return r.errorRate>=0.3}).map(function(r){return [shortTool(r.tool),(r.errorRate*100).toFixed(0)+'%',r.errors+'/'+r.results]});
   var denialRows=R.denials.topPatterns.map(function(r){return [r.pattern,fmtN(r.count),{html:'<span class="muted">'+esc(Object.entries(r.kinds).map(function(e){return e[0]+' ×'+e[1]}).join(', '))+'</span>'}]});
   var hookRows=R.hooks.rows.map(function(r){return [{html:esc(r.hook)+(r.timeouts?' <span class="pill">'+Number(r.timeouts)+' timeouts</span>':'')},fmtN(r.count),fmtN(r.medianMs)+'ms',(r.totalWaitMs/60000).toFixed(1)+'min']});
   var skills=Object.entries(R.skillsInvokedByModel).sort(function(a,b){return b[1]-a[1]}).map(function(e){return {label:e[0],value:fmtN(e[1]),share:e[1]}});
@@ -434,6 +434,15 @@ function route(){
   document.querySelectorAll('.tab').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-tab')===tab)});
   window.scrollTo(0,0);
 }
+document.addEventListener('click',function(ev){
+  var b=ev.target.closest?ev.target.closest('.more-btn'):null;
+  if(!b)return;
+  var d=document.getElementById(b.getAttribute('data-more'));
+  if(!d)return;
+  var hidden=d.style.display==='none';
+  d.style.display=hidden?'':'none';
+  b.textContent=hidden?'show fewer':'show '+b.getAttribute('data-n')+' more';
+});
 window.addEventListener('hashchange',route);
 document.querySelectorAll('.tab').forEach(function(b){b.addEventListener('click',function(){location.hash='#'+b.getAttribute('data-tab')})});
 route();
