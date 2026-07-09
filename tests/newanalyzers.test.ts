@@ -327,7 +327,8 @@ test("Codex totals sum per-turn last_token_usage across files; session ids still
   assert.equal(state.sessions, 1);
   assert.equal(state.totalInput, 500);
   assert.equal(state.totalOutput, 35);
-  assert.equal(state.contextWindowFillRatios.length, 2);
+  assert.equal(state.contextWindowFillRatios.length, 1);
+  assert.ok(Math.abs(state.contextWindowFillRatios[0] - 0.4) < 1e-9);
 });
 
 test("--since window excludes pre-cutoff Codex usage even within one session's cumulative counter", async () => {

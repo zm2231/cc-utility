@@ -132,10 +132,10 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
   const hourlySamples = new Map<number, CodexRateLimitSample>();
   const sessionIds = new Set<string>();
   const prevTurnKeyBySession = new Map<string, string>();
+  const fillBySession = new Map<string, { fill: number; ts: number }>();
 
   for (const file of files) {
     let sessionId = file;
-    let lastContextFill: number | null = null;
 
     for await (const raw of readRecords(file)) {
       const rec = raw as CodexRecord;
@@ -216,7 +216,11 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
             }
             const window = safeNum(p.info?.model_context_window);
             if (inWindow && window > 0 && t.input > 0) {
-              lastContextFill = t.input / window;
+              const existing = fillBySession.get(sessionId);
+              const fillTs = Number.isNaN(ts) ? existing?.ts ?? 0 : ts;
+              if (!existing || fillTs >= existing.ts) {
+                fillBySession.set(sessionId, { fill: t.input / window, ts: fillTs });
+              }
             }
           }
           const rl = p.rate_limits;
@@ -236,10 +240,10 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
       }
     }
 
-    if (lastContextFill !== null) state.contextWindowFillRatios.push(lastContextFill);
     state.filesScanned += 1;
   }
 
+  state.contextWindowFillRatios = [...fillBySession.values()].map((f) => f.fill);
   state.rateLimitSamples = [...hourlySamples.values()].sort((a, b) => a.ts - b.ts);
   return state;
 }

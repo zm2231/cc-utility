@@ -319,9 +319,13 @@ export function renderReport(
       console.log(`    Busiest weekday:     ${rateLimitTrends.busiestWeekday}`);
     }
     if (rateLimitTrends.thresholdCrossings.length) {
-      console.log(kleur.yellow(`    ⚠ Crossed 80% utilization ${rateLimitTrends.thresholdCrossings.length} time(s):`));
+      const saturated = rateLimitTrends.thresholdCrossings.filter((c) => c.pct >= 100);
+      console.log(kleur.dim(`    Crossed 80% utilization ${rateLimitTrends.thresholdCrossings.length} time(s) (full subscription use, not a problem):`));
       for (const c of rateLimitTrends.thresholdCrossings.slice(-5)) {
-        console.log(`      ${c.window === "five_hour" ? "5h " : "7d "} ${c.ts}  ${c.pct}%`);
+        console.log(kleur.dim(`      ${c.window === "five_hour" ? "5h " : "7d "} ${c.ts}  ${c.pct}%`));
+      }
+      if (saturated.length) {
+        console.log(kleur.yellow(`    ⚠ Hit 100% and got locked out ${saturated.length} time(s); shift heavy batch work off-peak if the lockouts land at bad times.`));
       }
     }
     console.log();
