@@ -91,7 +91,7 @@ export function busiestHour(report: JsonReport): string {
   const entries = Object.entries(report.promptPatterns.hourHistogram) as Array<[string, number]>;
   if (!entries.length) return "—";
   const [hour, count] = entries.sort((a, b) => b[1] - a[1])[0];
-  return `${hour}:00 UTC (${fmtNum(count)} prompts)`;
+  return `${hour}:00 local (${fmtNum(count)} prompts)`;
 }
 
 export function anomalyRows(report: JsonReport): { html: string; count: number; windowLabel: string } {

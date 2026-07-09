@@ -5,6 +5,10 @@ import { findStaleContextSessions } from "../analyze/compaction.js";
 import type { QuotaUsage } from "../quota/official.js";
 import type { RateLimitTrends } from "../analyze/rateLimitHistory.js";
 import { buildRecentWindowRollup } from "../analyze/historySnapshot.js";
+import { summarizeHooks, isSlowHook } from "../analyze/hooks.js";
+import { topDenials } from "../analyze/denials.js";
+import type { ContextAttribution } from "../analyze/contextAttribution.js";
+import { buildCodexReport, type CodexState } from "../codex/scan.js";
 
 const STALE_CONTEXT_THRESHOLD = 150_000;
 const MIN_TOOL_RESULTS_FOR_FRICTION = 5;
@@ -19,7 +23,13 @@ function buildToolFriction(state: AnalysisState): Array<{ tool: string; results:
   return rows.sort((a, b) => b.errorRate - a.errorRate).slice(0, 15);
 }
 
-export function buildJsonReport(state: AnalysisState, quota: QuotaUsage | null, rateLimitTrends: RateLimitTrends | null = null) {
+export function buildJsonReport(
+  state: AnalysisState,
+  quota: QuotaUsage | null,
+  rateLimitTrends: RateLimitTrends | null = null,
+  attribution: ContextAttribution | null = null,
+  codex: CodexState | null = null,
+) {
   const hitRate = overallCacheHitRate(state);
 
   let totalCompactions = 0;
@@ -56,12 +66,16 @@ export function buildJsonReport(state: AnalysisState, quota: QuotaUsage | null, 
       cacheHitRate: hitRate,
     },
     contextOverhead: {
-      avgFirstTurnCacheRead: state.firstTurnCacheRead.length
-        ? state.firstTurnCacheRead.reduce((a, b) => a + b, 0) / state.firstTurnCacheRead.length
+      avgFirstTurnTokens: state.firstTurnContext.length
+        ? state.firstTurnContext.reduce((a, b) => a + b, 0) / state.firstTurnContext.length
         : 0,
-      maxFirstTurnCacheRead: state.firstTurnCacheRead.length ? Math.max(...state.firstTurnCacheRead) : 0,
-      sessionsCounted: state.firstTurnCacheRead.length,
+      medianFirstTurnTokens: percentile(state.firstTurnContext, 0.5),
+      p90FirstTurnTokens: percentile(state.firstTurnContext, 0.9),
+      maxFirstTurnTokens: state.firstTurnContext.length ? Math.max(...state.firstTurnContext) : 0,
+      sessionsCounted: state.firstTurnContext.length,
+      continuationSessionsExcluded: state.continuationSessions.size,
     },
+    contextAttribution: attribution,
     modelMix: Object.fromEntries(state.modelTurns),
     toolCalls: Object.fromEntries(topN(state.toolCounts, 30)),
     fileExtensionsRead: Object.fromEntries(topN(state.fileExtCounts, 30)),
@@ -91,6 +105,35 @@ export function buildJsonReport(state: AnalysisState, quota: QuotaUsage | null, 
       rejectedToolUseCount: state.rejectedToolUseCount,
       toolErrorRate: state.toolResultCount ? state.toolErrorCount / state.toolResultCount : 0,
     },
+    denials: {
+      byKind: Object.fromEntries(state.denialsByKind),
+      topPatterns: topDenials(state, 15),
+      note: "byKind counts denial records (CLI-stamped toolDenialKind); topPatterns resolves each denied tool_use back to its tool, Bash entries keyed by first two command words.",
+    },
+    hooks: {
+      rows: summarizeHooks(state).map((r) => ({ ...r, slow: isSlowHook(r) })),
+      note: "Durations from transcript hook attachments; successful runs with empty output are not persisted, so counts are floors. hook_cancelled without timedOut (user Esc) is excluded.",
+    },
+    sidechain: {
+      input: state.sidechainInput,
+      output: state.sidechainOutput,
+      cacheRead: state.sidechainCacheRead,
+      cacheCreation: state.sidechainCacheCreation,
+      toolCalls: state.sidechainToolCalls,
+      outputShare: state.totalOutput ? state.sidechainOutput / state.totalOutput : 0,
+    },
+    projects: [...state.projectStats.entries()]
+      .map(([cwd, p]) => ({
+        cwd,
+        input: p.input,
+        output: p.output,
+        cacheRead: p.cacheRead,
+        cacheCreation: p.cacheCreation,
+        toolCalls: p.toolCalls,
+        sessions: p.sessionIds.size,
+      }))
+      .sort((a, b) => b.output - a.output)
+      .slice(0, 20),
     slashCommandsTyped: Object.fromEntries(topN(state.skillUserInvoked, 30)),
     skillsInvokedByModel: Object.fromEntries(topN(state.skillCounts, 30)),
     claudeMdFiles: Object.fromEntries(state.claudeMdSizes),
@@ -147,5 +190,6 @@ export function buildJsonReport(state: AnalysisState, quota: QuotaUsage | null, 
       : null,
     rateLimitTrends,
     recentWindow: buildRecentWindowRollup(state, 30),
+    codex: codex ? buildCodexReport(codex) : null,
   };
 }

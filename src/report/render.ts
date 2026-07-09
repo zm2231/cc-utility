@@ -5,6 +5,10 @@ import { topN, percentile } from "../analyze/state.js";
 import { findStaleContextSessions } from "../analyze/compaction.js";
 import type { QuotaUsage } from "../quota/official.js";
 import type { RateLimitTrends } from "../analyze/rateLimitHistory.js";
+import { summarizeHooks, isSlowHook } from "../analyze/hooks.js";
+import { topDenials } from "../analyze/denials.js";
+import type { ContextAttribution } from "../analyze/contextAttribution.js";
+import { buildCodexReport, type CodexState } from "../codex/scan.js";
 
 const MIN_TOOL_RESULTS_FOR_FRICTION = 5;
 
@@ -28,7 +32,13 @@ function bar(value: number, max: number, width = 30): string {
   return "█".repeat(Math.max(0, filled)) + "░".repeat(Math.max(0, width - filled));
 }
 
-export function renderReport(state: AnalysisState, quota: QuotaUsage | null, rateLimitTrends: RateLimitTrends | null = null): void {
+export function renderReport(
+  state: AnalysisState,
+  quota: QuotaUsage | null,
+  rateLimitTrends: RateLimitTrends | null = null,
+  attribution: ContextAttribution | null = null,
+  codex: CodexState | null = null,
+): void {
   const line = () => console.log(kleur.dim("─".repeat(64)));
 
   console.log();
@@ -51,16 +61,28 @@ export function renderReport(state: AnalysisState, quota: QuotaUsage | null, rat
   console.log();
 
   console.log(kleur.bold("  Context overhead (measured, not estimated)"));
-  if (state.firstTurnCacheRead.length) {
-    const avg = state.firstTurnCacheRead.reduce((a, b) => a + b, 0) / state.firstTurnCacheRead.length;
-    const max = Math.max(...state.firstTurnCacheRead);
-    console.log(`    Avg loaded before first turn: ${fmt(avg)} tokens (across ${state.firstTurnCacheRead.length} sessions)`);
-    console.log(`    Max seen:                     ${fmt(max)} tokens`);
-    console.log(kleur.dim(`    This is cache_read on each session's first assistant turn: system prompt + CLAUDE.md + MCP/skill defs + auto-memory, whatever loaded before any real work began.`));
+  if (state.firstTurnContext.length) {
+    const avg = state.firstTurnContext.reduce((a, b) => a + b, 0) / state.firstTurnContext.length;
+    const max = Math.max(...state.firstTurnContext);
+    console.log(`    Median loaded before first turn: ${fmt(percentile(state.firstTurnContext, 0.5))} tokens  (avg ${fmt(avg)}, max ${fmt(max)}, across ${fmt(state.firstTurnContext.length)} fresh sessions)`);
+    console.log(kleur.dim(`    Total input on each fresh session's first assistant turn: system prompt + CLAUDE.md + MCP/skill defs + auto-memory. ${fmt(state.continuationSessions.size)} continuation sessions excluded.`));
   } else {
     console.log(kleur.dim("    No data."));
   }
   console.log();
+
+  if (attribution) {
+    console.log(kleur.bold("  Context overhead attribution") + kleur.dim("  (disk-based estimates of what loads before turn one)"));
+    for (const item of attribution.items) {
+      console.log(`    ${fmt(item.estTokens).padStart(7)} tok  ${item.component}`);
+      console.log(kleur.dim(`                 ${item.detail}`));
+    }
+    const skillItem = attribution.items.find((i) => i.component.startsWith("Skill listing"));
+    if (skillItem && skillItem.estTokens > attribution.skillListingBudgetTokens) {
+      console.log(kleur.yellow(`    ⚠ Skill listing (${fmt(skillItem.estTokens)} est. tokens) exceeds its ~${fmt(attribution.skillListingBudgetTokens)}-token budget (~1% of context); entries get truncated and skill routing degrades. Trim descriptions or set disable-model-invocation on unused skills.`));
+    }
+    console.log();
+  }
 
   console.log(kleur.bold("  Model mix"));
   const modelEntries = [...state.modelTurns.entries()].sort((a, b) => b[1] - a[1]);
@@ -135,6 +157,28 @@ export function renderReport(state: AnalysisState, quota: QuotaUsage | null, rat
   }
   console.log();
 
+  const hookRows = summarizeHooks(state);
+  if (hookRows.length) {
+    console.log(kleur.bold("  Hook latency") + kleur.dim("  (blocking time from transcript hook records; counts are floors)"));
+    for (const r of hookRows.slice(0, 8)) {
+      const label = `${r.hook}:`.padEnd(36);
+      const lineTxt = `    ${label} n=${fmt(r.count)}  med ${fmt(r.medianMs)}ms  p95 ${fmt(r.p95Ms)}ms  max ${fmt(r.maxMs)}ms  total wait ${(r.totalWaitMs / 60000).toFixed(1)}min`;
+      console.log(isSlowHook(r) ? kleur.yellow(lineTxt + (r.timeouts ? `  (${r.timeouts} timeouts)` : "  ⚠ slow")) : lineTxt);
+    }
+    console.log();
+  }
+
+  if (state.denialsByKind.size) {
+    console.log(kleur.bold("  Permission denials") + kleur.dim("  (CLI-stamped toolDenialKind)"));
+    const kindLine = [...state.denialsByKind.entries()].map(([k, v]) => `${k}: ${fmt(v)}`).join(", ");
+    console.log(`    By kind:  ${kindLine}`);
+    for (const d of topDenials(state, 8)) {
+      const kinds = Object.entries(d.kinds).map(([k, v]) => `${k}×${v}`).join(", ");
+      console.log(`    ${d.pattern.padEnd(36)} ${fmt(d.count)}  (${kinds})`);
+    }
+    console.log();
+  }
+
   console.log(kleur.bold("  Interrupts & tool errors"));
   console.log(`    User interruptions:  ${fmt(state.interruptCount)}`);
   console.log(`    Tool errors:         ${fmt(state.toolErrorCount)} / ${fmt(state.toolResultCount)} tool results (${pct(state.toolResultCount ? state.toolErrorCount / state.toolResultCount : 0)})`);
@@ -182,6 +226,20 @@ export function renderReport(state: AnalysisState, quota: QuotaUsage | null, rat
     console.log(kleur.bold("  Delegation (subagents)"));
     console.log(`    Agent tool calls:    ${fmt(agentCalls)}`);
     console.log(`    Sidechain records:   ${fmt(state.sidechainRecordCount)}  (${fmt(state.sidechainSessionIds.size)} sessions delegated at least once)`);
+    if (state.totalOutput) {
+      console.log(`    Subagent share:      ${pct(state.sidechainOutput / state.totalOutput)} of output tokens, ${fmt(state.sidechainToolCalls)} tool calls`);
+    }
+    console.log();
+  }
+
+  if (state.projectStats.size) {
+    console.log(kleur.bold("  Top projects by output tokens"));
+    const projRows = [...state.projectStats.entries()]
+      .sort((a, b) => b[1].output - a[1].output)
+      .slice(0, 8);
+    for (const [cwd, p] of projRows) {
+      console.log(`    ${fmt(p.output).padStart(11)} out  ${fmt(p.sessionIds.size).padStart(5)} sessions  ${cwd}`);
+    }
     console.log();
   }
 
@@ -265,6 +323,28 @@ export function renderReport(state: AnalysisState, quota: QuotaUsage | null, rat
       for (const c of rateLimitTrends.thresholdCrossings.slice(-5)) {
         console.log(`      ${c.window === "five_hour" ? "5h " : "7d "} ${c.ts}  ${c.pct}%`);
       }
+    }
+    console.log();
+  }
+
+  if (codex) {
+    const cx = buildCodexReport(codex);
+    console.log(kleur.bold().magenta("  Codex") + kleur.dim(`  (~/.codex/sessions: ${fmt(cx.filesScanned)} rollout files, ${fmt(cx.sessions)} sessions)`));
+    console.log(`    Input tokens:        ${fmt(cx.tokens.totalInput)}  (${pct(cx.tokens.cacheShareOfInput)} served from cache)`);
+    console.log(`    Output tokens:       ${fmt(cx.tokens.totalOutput)}  (${fmt(cx.tokens.totalReasoningOutput)} reasoning)`);
+    const cxModels = Object.entries(cx.models);
+    if (cxModels.length) {
+      console.log(`    Models:              ${cxModels.map(([m, n]) => `${m} ×${fmt(n)}`).join(", ")}`);
+    }
+    const cxTools = Object.entries(cx.toolCalls).slice(0, 5);
+    if (cxTools.length) {
+      console.log(`    Top tools:           ${cxTools.map(([t, n]) => `${t} ×${fmt(n)}`).join(", ")}`);
+    }
+    if (cx.contextWindowFill.sessionsMeasured) {
+      console.log(`    End-of-session context fill: median ${pct(cx.contextWindowFill.medianEndOfSessionFill)}, p90 ${pct(cx.contextWindowFill.p90EndOfSessionFill)}`);
+    }
+    if (cx.rateLimits.latest) {
+      console.log(`    Rate limits (latest logged ${cx.rateLimits.latest.at}): 5h ${cx.rateLimits.latest.primaryPct ?? "?"}%, weekly ${cx.rateLimits.latest.secondaryPct ?? "?"}%  (peaks: ${cx.rateLimits.peakPrimaryPct}% / ${cx.rateLimits.peakSecondaryPct}%)`);
     }
     console.log();
   }

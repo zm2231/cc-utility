@@ -12,7 +12,11 @@ import { processTurnDuration } from "./analyze/turns.js";
 import { processAwayWork } from "./analyze/away.js";
 import { processQueueOperation } from "./analyze/queue.js";
 import { processFileHistorySnapshot } from "./analyze/filehistory.js";
+import { processHookAttachment } from "./analyze/hooks.js";
+import { processDenial, correlateDenials } from "./analyze/denials.js";
+import { buildContextAttribution } from "./analyze/contextAttribution.js";
 import { collectClaudeMdSizes } from "./analyze/claudemd.js";
+import { defaultCodexRoot, findCodexFiles, scanCodex } from "./codex/scan.js";
 import { computeRateLimitTrends, defaultSidecarLogPath, parseSidecarLog } from "./analyze/rateLimitHistory.js";
 import { buildAllDailySnapshots, defaultHistoryPath, toCsv, writeHistory } from "./analyze/historySnapshot.js";
 import { collectAssistant, collectCompaction, resolveChronological, sessionKey, type PendingSessionData } from "./analyze/resolve.js";
@@ -22,10 +26,7 @@ import { fetchOfficialQuota } from "./quota/official.js";
 import { renderReport } from "./report/render.js";
 import { buildJsonReport } from "./report/json.js";
 import { buildOptimizationRanking } from "./report/optimizationRanking.js";
-import { buildHtmlReport } from "./report/html.js";
-import { buildGridReport } from "./report/htmlGrid.js";
-import { buildSidebarReport } from "./report/htmlSidebar.js";
-import { buildTerminalReport } from "./report/htmlTerminal.js";
+import { buildDashboard } from "./report/dashboard.js";
 import { serveReport } from "./serve.js";
 import { writeFileSync } from "node:fs";
 
@@ -36,6 +37,20 @@ function flagValue(args: string[], name: string, defaultValue: string): string |
   return eq === -1 ? defaultValue : flag.slice(eq + 1);
 }
 
+function parseSince(value: string | null): number {
+  if (!value) return 0;
+  const rel = value.match(/^(\d+)([dwm])$/);
+  if (rel) {
+    const n = Number(rel[1]);
+    const unitMs = rel[2] === "d" ? 86_400_000 : rel[2] === "w" ? 604_800_000 : 2_592_000_000;
+    return Date.now() - n * unitMs;
+  }
+  const abs = Date.parse(value);
+  if (!Number.isNaN(abs)) return abs;
+  console.error(`Unparseable --since "${value}". Use 30d, 4w, 2m, or an ISO date.`);
+  process.exit(1);
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const wantQuota = args.includes("--quota");
@@ -44,29 +59,20 @@ async function main(): Promise<void> {
   const csvOutPath = flagValue(args, "--csv", "cc-utility-history.csv");
   const wantServe = args.includes("--serve") || args[0] === "serve";
   const servePort = Number(flagValue(args, "--port", "0") ?? "0") || 4173;
-  const layoutArg = flagValue(args, "--layout", "terminal") ?? (wantServe ? "terminal" : "classic");
-  const LAYOUTS = ["classic", "grid", "sidebar", "terminal"] as const;
-  if (!LAYOUTS.includes(layoutArg as (typeof LAYOUTS)[number])) {
-    console.error(`Unknown --layout "${layoutArg}". Allowed: ${LAYOUTS.join(", ")}.`);
-    process.exit(1);
-  }
-  const layout = layoutArg as (typeof LAYOUTS)[number];
-  const builders = {
-    classic: buildHtmlReport,
-    grid: buildGridReport,
-    sidebar: buildSidebarReport,
-    terminal: buildTerminalReport,
-  } as const;
+  const sinceArg = flagValue(args, "--since", "");
+  const minTs = parseSince(sinceArg);
+  const wantCodex = !args.includes("--no-codex");
   const root = defaultProjectsRoot();
 
   const state = createState();
-  const files = findSessionFiles(root);
+  const files = findSessionFiles(root, minTs);
   state.filesTotal = files.length;
 
   const pending = new Map<string, PendingSessionData>();
 
   for (const file of files) {
     for await (const rec of readRecords(file)) {
+      if (minTs && rec.timestamp && Date.parse(rec.timestamp) < minTs) continue;
       trackCwd(state, rec);
       trackSidechain(state, rec);
 
@@ -79,13 +85,15 @@ async function main(): Promise<void> {
         continue;
       }
 
-      processPrompt(state, rec);
+      processPrompt(state, rec, sessionKey(rec, file));
       processGovernance(state, rec, sessionKey(rec, file));
+      processDenial(state, rec, sessionKey(rec, file));
       processCommandInvocation(state, rec);
       processTurnDuration(state, rec, sessionKey(rec, file));
       processAwayWork(state, rec);
       processQueueOperation(state, rec, sessionKey(rec, file));
       processFileHistorySnapshot(state, rec);
+      processHookAttachment(state, rec);
     }
     state.filesProcessed += 1;
   }
@@ -99,7 +107,11 @@ async function main(): Promise<void> {
   }
 
   correlateToolFriction(state);
+  correlateDenials(state);
   collectClaudeMdSizes(state);
+  const attribution = buildContextAttribution(state);
+
+  const codex = wantCodex ? await scanCodex(findCodexFiles(defaultCodexRoot(), minTs), minTs) : null;
 
   const quota = wantQuota ? await fetchOfficialQuota() : null;
   if (wantQuota && !quota && !wantJson) {
@@ -107,7 +119,7 @@ async function main(): Promise<void> {
   }
 
   const rateLimitTrends = computeRateLimitTrends(parseSidecarLog(defaultSidecarLogPath()));
-  const report = buildJsonReport(state, quota, rateLimitTrends);
+  const report = buildJsonReport(state, quota, rateLimitTrends, attribution, codex);
 
   const history = buildAllDailySnapshots(state);
   writeHistory(defaultHistoryPath(), history);
@@ -124,19 +136,19 @@ async function main(): Promise<void> {
 
   if (wantServe) {
     const findings = buildOptimizationRanking(report);
-    const html = builders[layout](report, findings, history);
+    const html = buildDashboard(report, findings, history);
     await serveReport(html, servePort);
     return;
   }
 
   if (htmlOutPath) {
     const findings = buildOptimizationRanking(report);
-    writeFileSync(htmlOutPath, builders[layout](report, findings, history));
-    console.log(`Wrote ${htmlOutPath} (layout: ${layout})`);
+    writeFileSync(htmlOutPath, buildDashboard(report, findings, history));
+    console.log(`Wrote ${htmlOutPath}`);
     return;
   }
 
-  renderReport(state, quota, rateLimitTrends);
+  renderReport(state, quota, rateLimitTrends, attribution, codex);
 }
 
 main().catch((err) => {

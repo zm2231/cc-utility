@@ -158,7 +158,70 @@ function findHotFile(report: JsonReport): OptimizationFinding | null {
   };
 }
 
+function findSlowHooks(report: JsonReport): OptimizationFinding[] {
+  return (report.hooks?.rows ?? [])
+    .filter((r) => r.slow)
+    .map((r) => ({
+      id: `slow-hook:${r.hook}`,
+      headline: r.timeouts
+        ? `Hook ${r.hook} timed out ${r.timeouts} time(s)`
+        : `Hook ${r.hook} blocks ~${(r.medianMs / 1000).toFixed(1)}s per firing (${r.count} firings)`,
+      detail: `Total measured wait ${(r.totalWaitMs / 60000).toFixed(1)} minutes (median ${r.medianMs}ms, p95 ${r.p95Ms}ms). Make it async, cache its output, or narrow its matcher.`,
+      severity: (r.timeouts > 0 || r.medianMs > 5000 ? "high" : "medium") as OptimizationFinding["severity"],
+      score: 30 + Math.min(r.totalWaitMs / 60000, 60),
+      evidence: { ...r },
+    }));
+}
+
+function findSkillListingOverBudget(report: JsonReport): OptimizationFinding | null {
+  const attr = report.contextAttribution;
+  if (!attr) return null;
+  const skillItem = attr.items.find((i) => i.component.startsWith("Skill listing"));
+  if (!skillItem || skillItem.estTokens <= attr.skillListingBudgetTokens) return null;
+  const ratio = skillItem.estTokens / attr.skillListingBudgetTokens;
+  return {
+    id: "skill-listing-over-budget",
+    headline: `Skill listing is ~${(ratio).toFixed(1)}x its context budget (${Math.round(skillItem.estTokens / 1000)}k est. tokens)`,
+    detail: `${skillItem.count} model-invocable skills. Past ~${Math.round(attr.skillListingBudgetTokens / 1000)}k tokens entries get truncated and skill routing degrades. Set disable-model-invocation: true on rarely-dispatched skills or shorten descriptions.`,
+    severity: ratio >= 3 ? "high" : "medium",
+    score: 40 + Math.min(ratio * 10, 50),
+    evidence: { estTokens: skillItem.estTokens, budget: attr.skillListingBudgetTokens, skillCount: skillItem.count },
+  };
+}
+
+function findDenialHotspots(report: JsonReport): OptimizationFinding | null {
+  const patterns = (report.denials?.topPatterns ?? []).filter((p) => p.count >= 5);
+  if (!patterns.length) return null;
+  const top = patterns[0];
+  return {
+    id: "denial-hotspots",
+    headline: `${top.pattern} was denied ${top.count} time(s)`,
+    detail: `Top repeated permission denials: ${patterns.slice(0, 5).map((p) => `${p.pattern} (${p.count})`).join(", ")}. For genuinely read-only commands, consider allow rules in settings; for user-rejected ones, the agent kept trying something you said no to.`,
+    severity: top.count >= 20 ? "high" : "medium",
+    score: 25 + Math.min(top.count, 60),
+    evidence: { patterns: patterns.slice(0, 10), kindsOverall: report.denials.byKind },
+  };
+}
+
+function findCodexContextFill(report: JsonReport): OptimizationFinding | null {
+  const cx = report.codex;
+  if (!cx || cx.contextWindowFill.sessionsMeasured < 20) return null;
+  const p90 = cx.contextWindowFill.p90EndOfSessionFill;
+  if (p90 < 0.7) return null;
+  return {
+    id: "codex-context-fill",
+    headline: `Codex sessions end at ${(p90 * 100).toFixed(0)}% context fill (p90)`,
+    detail: `Across ${cx.contextWindowFill.sessionsMeasured} sessions. Sessions routinely running near the window ceiling lose early context; split work or start fresh threads sooner.`,
+    severity: p90 >= 0.9 ? "high" : "medium",
+    score: 20 + p90 * 30,
+    evidence: { ...cx.contextWindowFill },
+  };
+}
+
 const SINGLE_FINDERS: Array<(report: JsonReport) => OptimizationFinding | null> = [
+  findSkillListingOverBudget,
+  findDenialHotspots,
+  findCodexContextFill,
   findLowCacheHitRate,
   findCompactionRetentionLoss,
   findBashBloat,
@@ -173,6 +236,7 @@ const SINGLE_FINDERS: Array<(report: JsonReport) => OptimizationFinding | null> 
 export function buildOptimizationRanking(report: JsonReport): OptimizationFinding[] {
   const findings: OptimizationFinding[] = [
     ...findToolFriction(report),
+    ...findSlowHooks(report),
     ...SINGLE_FINDERS.map((fn) => fn(report)).filter((f): f is OptimizationFinding => f !== null),
   ];
   return findings.sort((a, b) => b.score - a.score);

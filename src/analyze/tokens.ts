@@ -20,6 +20,26 @@ export function processTokens(state: AnalysisState, rec: SessionRecord, sessionI
   state.totalCacheCreation += cacheCreation;
   state.totalCacheRead += cacheRead;
 
+  if (rec.isSidechain === true) {
+    state.sidechainInput += inputTokens;
+    state.sidechainOutput += outputTokens;
+    state.sidechainCacheRead += cacheRead;
+    state.sidechainCacheCreation += cacheCreation;
+  }
+
+  if (typeof rec.cwd === "string" && rec.cwd) {
+    let proj = state.projectStats.get(rec.cwd);
+    if (!proj) {
+      proj = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, toolCalls: 0, sessionIds: new Set() };
+      state.projectStats.set(rec.cwd, proj);
+    }
+    proj.input += inputTokens;
+    proj.output += outputTokens;
+    proj.cacheRead += cacheRead;
+    proj.cacheCreation += cacheCreation;
+    proj.sessionIds.add(sessionId);
+  }
+
   if (rec.timestamp) {
     const dt = new Date(rec.timestamp);
     if (!Number.isNaN(dt.getTime())) {
@@ -33,7 +53,9 @@ export function processTokens(state: AnalysisState, rec: SessionRecord, sessionI
 
   if (!state.sessionsSeenForFirstTurn.has(sessionId)) {
     state.sessionsSeenForFirstTurn.add(sessionId);
-    state.firstTurnCacheRead.push(cacheRead);
+    if (!state.continuationSessions.has(sessionId) && rec.isSidechain !== true) {
+      state.firstTurnContext.push(cacheRead + inputTokens + cacheCreation);
+    }
   }
 
   const ctx = getSessionContext(state, sessionId);
@@ -51,6 +73,6 @@ export function processTokens(state: AnalysisState, rec: SessionRecord, sessionI
 }
 
 export function overallCacheHitRate(state: AnalysisState): number {
-  const denom = state.totalCacheRead + state.totalInput;
+  const denom = state.totalCacheRead + state.totalInput + state.totalCacheCreation;
   return denom ? state.totalCacheRead / denom : 0;
 }

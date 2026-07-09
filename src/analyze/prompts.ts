@@ -24,12 +24,24 @@ function looksAutomated(text: string): boolean {
   return false;
 }
 
-export function processPrompt(state: AnalysisState, rec: SessionRecord): void {
+const CONTINUATION_PREFIX = "This session is being continued from a previous conversation";
+
+export function processPrompt(state: AnalysisState, rec: SessionRecord, sessionId?: string): void {
   if (rec.type !== "user") return;
   if (rec.isSidechain) return;
+  if (typeof rec.toolDenialKind === "string" && rec.toolDenialKind) return;
+
+  if (rec.isCompactSummary === true && sessionId) {
+    state.continuationSessions.add(sessionId);
+  }
 
   const text = extractText(rec.message?.content);
   if (text === null) return;
+  if (text.trim().startsWith(CONTINUATION_PREFIX)) {
+    if (sessionId) state.continuationSessions.add(sessionId);
+    state.automatedPromptCount += 1;
+    return;
+  }
   if (looksAutomated(text)) {
     state.automatedPromptCount += 1;
     return;
@@ -53,8 +65,8 @@ export function processPrompt(state: AnalysisState, rec: SessionRecord): void {
   if (rec.timestamp) {
     const dt = new Date(rec.timestamp);
     if (!Number.isNaN(dt.getTime())) {
-      bumpNum(state.promptHours, dt.getUTCHours());
-      const weekday = dt.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
+      bumpNum(state.promptHours, dt.getHours());
+      const weekday = dt.toLocaleDateString("en-US", { weekday: "long" });
       bump(state.promptWeekdays, weekday);
     }
   }

@@ -20,6 +20,17 @@ export function processTools(state: AnalysisState, rec: SessionRecord, sessionId
 
     if (typeof block.id === "string" && block.id) {
       state.toolUseNameById.set(toolUseKey(sessionId, block.id), name);
+      if (name === "Bash" && typeof block.input?.command === "string") {
+        const head = (block.input.command as string).trim().split(/\s+/).slice(0, 2).join(" ");
+        if (head) state.toolUseBashHeadById.set(toolUseKey(sessionId, block.id), head);
+      }
+    }
+
+    if (rec.isSidechain === true) state.sidechainToolCalls += 1;
+
+    if (typeof rec.cwd === "string" && rec.cwd) {
+      const proj = state.projectStats.get(rec.cwd);
+      if (proj) proj.toolCalls += 1;
     }
 
     if (dateKey) {

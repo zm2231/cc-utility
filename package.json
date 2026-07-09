@@ -1,11 +1,11 @@
 {
   "name": "cc-utility",
-  "version": "0.2.0",
-  "description": "Local-first analytics for Claude Code session logs. No telemetry, no paywall.",
+  "version": "0.3.0",
+  "description": "Local-first analytics and harness doctor for Claude Code and Codex session logs",
   "type": "module",
   "license": "MIT",
   "bin": {
-    "cc-utility": "./dist/cli.js"
+    "cc-utility": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",

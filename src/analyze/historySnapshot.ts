@@ -37,7 +37,7 @@ function worstToolFrictionForDay(bucket: DayBucket): number {
 }
 
 function snapshotFromBucket(date: string, bucket: DayBucket): DailySnapshot {
-  const denom = bucket.totalCacheRead + bucket.totalInput;
+  const denom = bucket.totalCacheRead + bucket.totalInput + bucket.totalCacheCreation;
   return {
     date,
     ts: `${date}T23:59:59.999Z`,

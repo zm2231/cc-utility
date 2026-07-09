@@ -6,7 +6,7 @@ export function defaultProjectsRoot(): string {
   return join(homedir(), ".claude", "projects");
 }
 
-export function findSessionFiles(root: string): string[] {
+export function findSessionFiles(root: string, minMtimeMs = 0): string[] {
   const out: string[] = [];
   const stack: string[] = [root];
   while (stack.length) {
@@ -28,6 +28,7 @@ export function findSessionFiles(root: string): string[] {
       if (st.isDirectory()) {
         stack.push(full);
       } else if (entry.endsWith(".jsonl")) {
+        if (minMtimeMs && st.mtimeMs < minMtimeMs) continue;
         out.push(full);
       }
     }

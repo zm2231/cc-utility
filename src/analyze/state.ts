@@ -8,8 +8,23 @@ export interface AnalysisState {
   totalCacheRead: number;
   modelTurns: Map<string, number>;
   cacheByMonth: Map<string, [number, number]>;
-  firstTurnCacheRead: number[];
+  firstTurnContext: number[];
   sessionsSeenForFirstTurn: Set<string>;
+  continuationSessions: Set<string>;
+
+  sidechainInput: number;
+  sidechainOutput: number;
+  sidechainCacheRead: number;
+  sidechainCacheCreation: number;
+  sidechainToolCalls: number;
+
+  projectStats: Map<string, ProjectStats>;
+
+  hookStats: Map<string, HookStat>;
+
+  denialsByKind: Map<string, number>;
+  denialEvents: Array<{ sessionId: string; toolUseId: string; kind: string; dateKey: string | null }>;
+  denialsByPattern: Map<string, { count: number; kinds: Map<string, number> }>;
 
   toolCounts: Map<string, number>;
   fileExtCounts: Map<string, number>;
@@ -48,6 +63,7 @@ export interface AnalysisState {
   scheduleWakeupDelays: number[];
 
   toolUseNameById: Map<string, string>;
+  toolUseBashHeadById: Map<string, string>;
   toolResultEvents: Array<{ sessionId: string; toolUseId: string; isError: boolean; dateKey: string | null }>;
   toolResultCountByTool: Map<string, number>;
   toolErrorCountByTool: Map<string, number>;
@@ -64,6 +80,22 @@ export interface AnalysisState {
   queueOpCounts: Map<string, number>;
 
   dayBuckets: Map<string, DayBucket>;
+}
+
+export interface ProjectStats {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+  toolCalls: number;
+  sessionIds: Set<string>;
+}
+
+export interface HookStat {
+  count: number;
+  errors: number;
+  timeouts: number;
+  durations: number[];
 }
 
 export interface DayBucket {
@@ -102,8 +134,19 @@ export function createState(): AnalysisState {
     totalCacheRead: 0,
     modelTurns: new Map(),
     cacheByMonth: new Map(),
-    firstTurnCacheRead: [],
+    firstTurnContext: [],
     sessionsSeenForFirstTurn: new Set(),
+    continuationSessions: new Set(),
+    sidechainInput: 0,
+    sidechainOutput: 0,
+    sidechainCacheRead: 0,
+    sidechainCacheCreation: 0,
+    sidechainToolCalls: 0,
+    projectStats: new Map(),
+    hookStats: new Map(),
+    denialsByKind: new Map(),
+    denialEvents: [],
+    denialsByPattern: new Map(),
     toolCounts: new Map(),
     fileExtCounts: new Map(),
     promptCount: 0,
@@ -132,6 +175,7 @@ export function createState(): AnalysisState {
     scheduledTaskFireCount: 0,
     scheduleWakeupDelays: [],
     toolUseNameById: new Map(),
+    toolUseBashHeadById: new Map(),
     toolResultEvents: [],
     toolResultCountByTool: new Map(),
     toolErrorCountByTool: new Map(),

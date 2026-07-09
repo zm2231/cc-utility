@@ -35,10 +35,21 @@ export interface FileHistorySnapshot {
   trackedFileBackups?: Record<string, unknown>;
 }
 
+export interface HookAttachment {
+  type?: string;
+  hookName?: string;
+  hookEvent?: string;
+  command?: string;
+  durationMs?: number;
+  timedOut?: boolean;
+  timeoutMs?: number;
+}
+
 export interface SessionRecord {
   type?: string;
   subtype?: string;
   uuid?: string;
+  parentUuid?: string | null;
   timestamp?: string;
   sessionId?: string;
   cwd?: string;
@@ -52,4 +63,7 @@ export interface SessionRecord {
   snapshot?: FileHistorySnapshot;
   durationMs?: number;
   messageCount?: number;
+  toolDenialKind?: string;
+  attachment?: HookAttachment;
+  isCompactSummary?: boolean;
 }
