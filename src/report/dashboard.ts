@@ -71,6 +71,21 @@ tbody tr:last-child td{border-bottom:none}
 .legend-item{display:flex;align-items:center;gap:6px}
 .sw{width:14px;height:3px;border-radius:2px;background:var(--accent);display:inline-block}
 .sw.secondary{background:var(--ink-3);opacity:.5}
+.seg{display:inline-flex;gap:2px;background:var(--track);border-radius:7px;padding:2px}
+.seg button{border:none;background:none;font:inherit;font-size:12px;color:var(--ink-3);padding:3px 10px;border-radius:5px;cursor:pointer}
+.seg button.on{background:var(--raise);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.chart-controls{display:flex;gap:10px;justify-content:flex-end;margin:-38px 0 10px}
+.heatwrap{position:relative;margin-top:10px;overflow-x:auto}
+.heat rect{rx:2px}
+.heat .lv0{fill:var(--track)}
+.heat .lv1{fill:#9ec5f4}.heat .lv2{fill:#5598e7}.heat .lv3{fill:#256abf}.heat .lv4{fill:#104281}
+@media (prefers-color-scheme: dark){.heat .lv1{fill:#184f95}.heat .lv2{fill:#1c5cab}.heat .lv3{fill:#3987e5}.heat .lv4{fill:#86b6ef}}
+.heat text{fill:var(--ink-3);font-size:9px}
+.band{display:flex;height:10px;border-radius:5px;overflow:hidden;margin:12px 0 6px}
+.band .fixed{background:var(--ink-3);opacity:.45}
+.band .yours{background:var(--accent)}
+.bandlegend{display:flex;gap:16px;font-size:12px;color:var(--ink-2)}
+.bandlegend .sw2{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:-1px}
 .cols2{display:grid;grid-template-columns:1fr 1fr;gap:40px}
 @media(max-width:680px){.cols2{grid-template-columns:1fr}.tiles{gap:16px}}
 footer{max-width:880px;margin:0 auto;padding:0 24px 40px;color:var(--ink-3);font-size:11.5px}
@@ -168,18 +183,113 @@ function findingRow(f){
   return '<div class="finding"><div class="finding-head"><span class="dot dot-'+esc(f.severity)+'"></span><span>'+esc(f.headline)+'</span></div><div class="finding-detail"><p>'+esc(f.detail)+'</p><pre>'+esc(JSON.stringify(f.evidence,null,2))+'</pre></div></div>';
 }
 
+var chartState={source:'all',view:'line'};
+
+function dailySeries(){
+  var byDate={};
+  HISTORY.forEach(function(h){
+    byDate[h.date]=byDate[h.date]||{claudeOut:0,claudeIn:0,claudeCacheW:0,codexIn:0,codexOut:0};
+    byDate[h.date].claudeOut=h.totalOutput;byDate[h.date].claudeIn=h.totalInput;byDate[h.date].claudeCacheW=h.totalCacheCreation;
+  });
+  ((R.codex&&R.codex.daily)||[]).forEach(function(d){
+    byDate[d.date]=byDate[d.date]||{claudeOut:0,claudeIn:0,claudeCacheW:0,codexIn:0,codexOut:0};
+    byDate[d.date].codexIn=d.input;byDate[d.date].codexOut=d.output;
+  });
+  return Object.keys(byDate).sort().map(function(date){var v=byDate[date];v.date=date;return v});
+}
+
+function heatmap(days){
+  if(days.length<2)return '<p class="empty">Not enough history yet.</p>';
+  var cell=12,gap=3,step=cell+gap;
+  var vals=days.map(function(d){return d.v});
+  var maxV=Math.max.apply(null,vals.concat([1]));
+  var byDate={};days.forEach(function(d){byDate[d.date]=d});
+  var start=new Date(days[0].date+'T00:00:00Z');
+  start.setUTCDate(start.getUTCDate()-start.getUTCDay());
+  var end=new Date(days[days.length-1].date+'T00:00:00Z');
+  var totalDays=Math.round((end-start)/86400000)+1;
+  var weeks=Math.max(1,Math.ceil(totalDays/7));
+  var width=weeks*step,height=7*step+16;
+  var rects='',monthLabels='',lastMonth='';
+  for(var i=0;i<weeks*7;i++){
+    var d=new Date(start.getTime()+i*86400000);
+    if(d>end)break;
+    var ds=d.toISOString().slice(0,10);
+    var entry=byDate[ds];
+    var v=entry?entry.v:0;
+    var lv=0;
+    if(v>0){var t=Math.log(1+v)/Math.log(1+maxV);lv=1+Math.min(3,Math.floor(t*4))}
+    var week=Math.floor(i/7),day=i%7;
+    rects+='<rect class="lv'+lv+'" data-d="'+esc(ds)+'" x="'+(week*step)+'" y="'+(day*step)+'" width="'+cell+'" height="'+cell+'"/>';
+    if(day===0){var m=d.toISOString().slice(5,7);if(m!==lastMonth){lastMonth=m;monthLabels+='<text x="'+(week*step)+'" y="'+(7*step+11)+'">'+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()]+'</text>'}}
+  }
+  return '<div class="heatwrap"><svg class="heat" viewBox="0 0 '+width+' '+height+'" width="100%" style="max-width:'+width+'px">'+rects+monthLabels+'</svg><div class="tooltip" style="display:none"></div></div>';
+}
+
+function wireHeatmap(root){
+  root.querySelectorAll('.heatwrap').forEach(function(wrap){
+    var tip=wrap.querySelector('.tooltip');
+    var data={};dailySeries().forEach(function(d){data[d.date]=d});
+    wrap.querySelectorAll('rect').forEach(function(r){
+      r.addEventListener('mousemove',function(ev){
+        var ds=r.getAttribute('data-d');var d=data[ds];
+        var lines=['<b>'+esc(ds)+'</b>'];
+        if(d){
+          if(chartState.source!=='codex')lines.push('Claude: '+fmtC(d.claudeOut)+' out · '+fmtC(d.claudeIn)+' in · '+fmtC(d.claudeCacheW)+' cache-write');
+          if(chartState.source!=='claude')lines.push('Codex: '+fmtC(d.codexOut)+' out · '+fmtC(d.codexIn)+' in');
+        } else lines.push('no activity');
+        tip.innerHTML=lines.join('<br>');tip.style.display='';
+        var rect=wrap.getBoundingClientRect();
+        var lx=ev.clientX-rect.left+14;if(lx>rect.width-220)lx=rect.width-220;
+        tip.style.left=lx+'px';tip.style.top=(ev.clientY-rect.top-40)+'px';
+      });
+      r.addEventListener('mouseleave',function(){tip.style.display='none'});
+    });
+  });
+}
+
+function dailyChartHtml(){
+  var days=dailySeries().slice(-365);
+  function val(d){
+    if(chartState.source==='claude')return {out:d.claudeOut,inp:d.claudeIn};
+    if(chartState.source==='codex')return {out:d.codexOut,inp:d.codexIn};
+    return {out:d.claudeOut+d.codexOut,inp:d.claudeIn+d.codexIn};
+  }
+  if(chartState.view==='heat'){
+    return heatmap(days.map(function(d){var v=val(d);return {date:d.date,v:v.out+v.inp}}));
+  }
+  var recent=days.slice(-90);
+  return lineChart([
+    {name:'output tokens / day',points:recent.map(function(d){return {x:d.date,y:val(d).out}})},
+    {name:'input tokens / day',secondary:true,points:recent.map(function(d){return {x:d.date,y:val(d).inp}})}
+  ]);
+}
+
+function chartControls(){
+  function seg(key,opts){
+    return '<div class="seg">'+opts.map(function(o){return '<button data-k="'+key+'" data-v="'+o[0]+'" class="'+(chartState[key]===o[0]?'on':'')+'">'+o[1]+'</button>'}).join('')+'</div>';
+  }
+  return '<div class="chart-controls">'+seg('source',[['all','All'],['claude','Claude'],['codex','Codex']])+seg('view',[['line','Line'],['heat','Days']])+'</div>';
+}
+
+function wireChartControls(root){
+  root.querySelectorAll('.chart-controls button').forEach(function(b){
+    b.addEventListener('click',function(){
+      chartState[b.getAttribute('data-k')]=b.getAttribute('data-v');
+      var host=document.getElementById('daily-chart');
+      host.innerHTML=chartControls()+dailyChartHtml();
+      wireCharts(host);wireHeatmap(host);wireChartControls(host);
+    });
+  });
+}
+
 function viewHome(){
   var co=R.contextOverhead,q=R.officialQuota,cx=R.codex;
   var high=FINDINGS.filter(function(f){return f.severity==='high'}).slice(0,3);
   var alerts=high.map(function(f){return '<div class="alert"><span>'+esc(f.headline)+'</span><a class="go" href="#optimizations">details →</a></div>'}).join('');
-  var recent=HISTORY.slice(-90);
-  var chart=lineChart([
-    {name:'output tokens / day',points:recent.map(function(h){return {x:h.date,y:h.totalOutput}})},
-    {name:'uncached input / day',secondary:true,points:recent.map(function(h){return {x:h.date,y:h.totalInput}})}
-  ]);
   var failing=R.toolFriction.filter(function(r){return r.errorRate>=0.25}).length;
   var slowHooks=R.hooks.rows.filter(function(r){return r.slow}).length;
-  var health='Cache '+pct(R.tokens.cacheHitRate)+' · '+(failing?failing+' tools failing':'tools healthy')+' · '+(slowHooks?slowHooks+' slow hooks':'hooks healthy')+' · '+fmtN(R.compaction.staleContextSessions.length)+' stale sessions';
+  var health='Cache '+pct(R.tokens.cacheHitRate)+' · '+(failing?failing+' tools failing':'tools healthy')+' · '+(slowHooks?slowHooks+' slow hooks':'hooks healthy')+' · '+fmtN(R.compaction.staleContextSessions.length)+' stale live sessions';
   return '<h1>Your coding agents</h1><div class="meta">'+fmtN(R.sessionsScanned)+' Claude Code sessions'+(cx?' · '+fmtN(cx.sessions)+' Codex sessions':'')+' · generated '+esc(DATA.generatedAt)+' · 100% local</div>'
     +(alerts?alerts+'':'')
     +'<h2>Usage</h2><div class="tiles">'
@@ -189,7 +299,7 @@ function viewHome(){
     +tile('Prompts',fmtC(R.promptPatterns.realPromptCount),pct(R.promptPatterns.questionShare)+' questions')
     +(q&&q.five_hour?tile('Quota now',q.five_hour.utilization+'%',q.seven_day?'5h · weekly '+q.seven_day.utilization+'%':'5h window'):'')
     +'</div><p class="healthline">'+esc(health)+'</p>'
-    +'<h2>Daily tokens</h2>'+chart;
+    +'<h2>Daily tokens</h2><div id="daily-chart">'+chartControls()+dailyChartHtml()+'</div>';
 }
 
 function viewOptimizations(){
@@ -202,6 +312,21 @@ function viewOptimizations(){
     out+='<h2>'+g[1]+'<span class="sum">'+list.length+'</span></h2>'+list.map(findingRow).join('');
   });
   return out;
+}
+
+var HARNESS_BASELINE_EST=13000;
+
+function fixedVsYours(){
+  var co=R.contextOverhead;
+  var median=co.medianFirstTurnTokens||0;
+  if(!median)return '';
+  var fixed=Math.min(HARNESS_BASELINE_EST,median);
+  var yours=Math.max(0,median-fixed);
+  return '<h2>Fixed vs yours<span class="sum">median first-turn context</span></h2>'
+    +'<div class="band"><div class="fixed" style="width:'+((fixed/median)*100).toFixed(1)+'%"></div><div class="yours" style="width:'+((yours/median)*100).toFixed(1)+'%"></div></div>'
+    +'<div class="bandlegend"><span><span class="sw2" style="background:var(--ink-3);opacity:.45"></span>Harness baseline ~'+fmtC(fixed)+' tok (est.): Claude Code\\'s system prompt + built-in tools; cannot be reduced</span>'
+    +'<span><span class="sw2" style="background:var(--accent)"></span>Your configuration ~'+fmtC(yours)+' tok: skills, agents, CLAUDE.md, MCP names, hooks, memory</span></div>'
+    +'<p class="hint">Your lightest sessions run '+fmtC(co.p5FirstTurnTokens||0)+' tok (5th percentile); heavy projects reach '+fmtC(co.p90FirstTurnTokens||0)+' tok (90th). The gap between those is per-project configuration.</p>';
 }
 
 function viewClaude(){
@@ -220,9 +345,11 @@ function viewClaude(){
     +tile('Before turn 1',fmtC(R.contextOverhead.medianFirstTurnTokens),'tokens · median of '+fmtN(R.contextOverhead.sessionsCounted)+' fresh sessions')
     +tile('Compaction keeps',pct(R.compactionRetention.medianRetainedFraction),'median retained')
     +tile('Reclaimed',fmtC(R.compaction.tokensReclaimed),'tokens via compaction')
-    +tile('Stale sessions',fmtN(R.compaction.staleContextSessions.length),'uncompacted growth')
+    +tile('Stale live sessions',fmtN(R.compaction.staleContextSessions.length),'active <7d, uncompacted growth')
     +'</div>'
+    +fixedVsYours()
     +'<h2>What loads before turn one</h2>'+barList(attrRows)+(attr?'<p class="hint">'+esc(attr.note)+'</p>':'')
+    +(attr&&attr.claudeMdByProject.length?'<h2>CLAUDE.md weight by project</h2>'+barList(attr.claudeMdByProject.map(function(p){return {label:p.cwd.split('/').slice(-2).join('/'),value:fmtC(p.estTokens)+' tok',share:p.estTokens}}))+'<p class="hint">Total CLAUDE.md tokens a session in that project loads (project file plus any ancestor-directory files).</p>':'')
     +'<div class="cols2"><div><h2>Model mix</h2>'+barList(models)+'</div><div><h2>Tool calls</h2>'+barList(tools)+'</div></div>'
     +'<h2>Failing tools</h2>'+tableHtml(['Tool','Fail rate','n'],frictionRows,{1:1,2:1})
     +'<h2>Permission denials</h2>'+tableHtml(['Pattern','Denied','Kind'],denialRows,{1:1})
@@ -268,7 +395,7 @@ function route(){
   if(!VIEWS[tab])tab='home';
   var main=document.getElementById('app');
   main.innerHTML=VIEWS[tab]();
-  wireCharts(main);
+  wireCharts(main);wireHeatmap(main);wireChartControls(main);
   document.querySelectorAll('.tab').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-tab')===tab)});
   window.scrollTo(0,0);
 }
@@ -282,7 +409,7 @@ export function buildDashboard(report: JsonReport, findings: OptimizationFinding
     generatedAt: new Date().toISOString().slice(0, 10),
     report,
     findings,
-    history: history.slice(-180),
+    history: history.slice(-370),
   };
   const json = JSON.stringify(data).replace(/</g, "\\u003c");
   const optCount = findings.length;

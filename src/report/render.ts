@@ -151,7 +151,7 @@ export function renderReport(
   const staleSessions = findStaleContextSessions(state, STALE_CONTEXT_THRESHOLD);
   if (staleSessions.length) {
     const neverCompacted = staleSessions.filter((s) => !s.everCompacted).length;
-    console.log(kleur.yellow(`    ⚠ ${staleSessions.length} session(s) carrying >${fmt(STALE_CONTEXT_THRESHOLD)} tokens of context without a recent compaction (${neverCompacted} never compacted at all). A long session with frequent, efficient compactions is fine; this flags context that's grown stale since the last one.`));
+    console.log(kleur.yellow(`    ⚠ ${staleSessions.length} session(s) active in the last 7 days carrying >${fmt(STALE_CONTEXT_THRESHOLD)} tokens of context without a recent compaction (${neverCompacted} never compacted at all). A long session with frequent, efficient compactions is fine; this flags context that's grown stale since the last one.`));
   } else {
     console.log(kleur.dim(`    No sessions found carrying excessive uncompacted context.`));
   }

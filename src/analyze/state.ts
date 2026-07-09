@@ -122,6 +122,7 @@ export interface SessionContextEntry {
   autoCompactions: number;
   tokensReclaimed: number;
   lastCompactionPostTokens: number | null;
+  lastActivityTs: number;
 }
 
 export function createState(): AnalysisState {
@@ -231,6 +232,7 @@ export function getSessionContext(state: AnalysisState, sessionId: string): Sess
       autoCompactions: 0,
       tokensReclaimed: 0,
       lastCompactionPostTokens: null,
+      lastActivityTs: 0,
     };
     state.sessionContext.set(sessionId, entry);
   }

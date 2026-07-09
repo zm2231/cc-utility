@@ -60,6 +60,10 @@ export function processTokens(state: AnalysisState, rec: SessionRecord, sessionI
 
   const ctx = getSessionContext(state, sessionId);
   ctx.latestContext = cacheRead + inputTokens;
+  if (rec.timestamp) {
+    const t = Date.parse(rec.timestamp);
+    if (!Number.isNaN(t)) ctx.lastActivityTs = Math.max(ctx.lastActivityTs, t);
+  }
 
   const dateKey = dateKeyOf(rec.timestamp);
   if (dateKey) {

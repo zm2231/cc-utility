@@ -34,9 +34,12 @@ export interface StaleSession {
   everCompacted: boolean;
 }
 
-export function findStaleContextSessions(state: AnalysisState, threshold: number): StaleSession[] {
+const STALE_RECENCY_MS = 7 * 86_400_000;
+
+export function findStaleContextSessions(state: AnalysisState, threshold: number, now = Date.now()): StaleSession[] {
   const out: StaleSession[] = [];
   for (const [sessionId, ctx] of state.sessionContext.entries()) {
+    if (ctx.lastActivityTs && now - ctx.lastActivityTs > STALE_RECENCY_MS) continue;
     const growthSinceCompaction = ctx.lastCompactionPostTokens === null
       ? ctx.latestContext
       : ctx.latestContext - ctx.lastCompactionPostTokens;

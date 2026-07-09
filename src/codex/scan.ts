@@ -37,6 +37,7 @@ interface CodexRecord {
       };
       last_token_usage?: {
         input_tokens?: number;
+        cached_input_tokens?: number;
         output_tokens?: number;
       };
       model_context_window?: number;
@@ -72,6 +73,7 @@ export interface CodexState {
   userMessages: number;
   turnsStarted: number;
   turnsCompleted: number;
+  daily: Map<string, { input: number; output: number }>;
   rateLimitSamples: CodexRateLimitSample[];
   peakPrimaryPct: number;
   peakSecondaryPct: number;
@@ -99,6 +101,7 @@ function createCodexState(): CodexState {
     userMessages: 0,
     turnsStarted: 0,
     turnsCompleted: 0,
+    daily: new Map(),
     rateLimitSamples: [],
     peakPrimaryPct: 0,
     peakSecondaryPct: 0,
@@ -193,6 +196,14 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
         else if (p.type === "task_started") state.turnsStarted += 1;
         else if (p.type === "task_complete") state.turnsCompleted += 1;
         else if (p.type === "token_count") {
+          const turn = p.info?.last_token_usage;
+          if (turn && !Number.isNaN(ts)) {
+            const dateKey = new Date(ts).toISOString().slice(0, 10);
+            const day = state.daily.get(dateKey) ?? { input: 0, output: 0 };
+            day.input += safeNum(turn.input_tokens);
+            day.output += safeNum(turn.output_tokens);
+            state.daily.set(dateKey, day);
+          }
           const usage = p.info?.total_token_usage;
           if (usage) {
             lastUsage = {
@@ -284,6 +295,9 @@ export function buildCodexReport(state: CodexState) {
     userMessages: state.userMessages,
     turnsStarted: state.turnsStarted,
     turnsCompleted: state.turnsCompleted,
+    daily: [...state.daily.entries()]
+      .map(([date, d]) => ({ date, input: d.input, output: d.output }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
     planTypes: Object.fromEntries(state.planTypes),
     contextWindowFill: {
       sessionsMeasured: state.contextWindowFillRatios.length,

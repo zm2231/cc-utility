@@ -18,6 +18,8 @@ test("end-to-end: real paths/session IDs shown (local tool, nothing transmitted)
   mkdirSync(claudeMdDir, { recursive: true });
   writeFileSync(join(claudeMdDir, "CLAUDE.md"), "some project instructions here");
 
+  const recentTs = new Date(Date.now() - 3_600_000).toISOString();
+  const recentTs2 = new Date(Date.now() - 3_599_000).toISOString();
   const lines = [
     "null",
     "[1,2,3]",
@@ -25,7 +27,7 @@ test("end-to-end: real paths/session IDs shown (local tool, nothing transmitted)
     JSON.stringify({
       type: "assistant",
       sessionId: "REAL_SESSION_ID",
-      timestamp: "2026-01-01T00:00:00Z",
+      timestamp: recentTs,
       message: { id: "m1", model: "claude-sonnet-5", usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 200_000 }, content: [{ type: "tool_use", name: "Read", input: { file_path: "/some/path/afile.ts" } }] },
     }),
     JSON.stringify({
@@ -33,7 +35,7 @@ test("end-to-end: real paths/session IDs shown (local tool, nothing transmitted)
       sessionId: "REAL_SESSION_ID",
       message: { content: [{ type: "tool_result", is_error: true, content: "The tool use was rejected. RAW_TOOL_OUTPUT_BODY" }] },
     }),
-    JSON.stringify({ type: "system", subtype: "compact_boundary", sessionId: "REAL_SESSION_ID", timestamp: "2026-01-01T00:00:01Z", compactMetadata: { trigger: "manual", preTokens: 1000, postTokens: 100 } }),
+    JSON.stringify({ type: "system", subtype: "compact_boundary", sessionId: "REAL_SESSION_ID", timestamp: recentTs2, compactMetadata: { trigger: "manual", preTokens: 1000, postTokens: 100 } }),
   ];
   writeFileSync(join(projDir, "session.jsonl"), lines.join("\n") + "\n");
 

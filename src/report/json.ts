@@ -69,6 +69,7 @@ export function buildJsonReport(
       avgFirstTurnTokens: state.firstTurnContext.length
         ? state.firstTurnContext.reduce((a, b) => a + b, 0) / state.firstTurnContext.length
         : 0,
+      p5FirstTurnTokens: percentile(state.firstTurnContext, 0.05),
       medianFirstTurnTokens: percentile(state.firstTurnContext, 0.5),
       p90FirstTurnTokens: percentile(state.firstTurnContext, 0.9),
       maxFirstTurnTokens: state.firstTurnContext.length ? Math.max(...state.firstTurnContext) : 0,
@@ -97,6 +98,7 @@ export function buildJsonReport(
       tokensReclaimed,
       staleContextSessions: staleSessions,
       staleContextThreshold: STALE_CONTEXT_THRESHOLD,
+      note: "Only sessions with activity in the last 7 days; ended sessions are not actionable.",
     },
     governance: {
       interruptCount: state.interruptCount,

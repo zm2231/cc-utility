@@ -12,6 +12,7 @@ export interface AttributionItem {
 
 export interface ContextAttribution {
   items: AttributionItem[];
+  claudeMdByProject: Array<{ cwd: string; estTokens: number }>;
   skillListingBudgetTokens: number;
   note: string;
 }
@@ -98,19 +99,22 @@ export function buildContextAttribution(state: AnalysisState, contextWindow = 20
     count: globalClaudeMd ? 1 : 0,
   });
 
-  const perProjectTotals: number[] = [];
+  const perProject: Array<{ cwd: string; estTokens: number }> = [];
   for (const cwd of state.cwdsSeen) {
     let total = 0;
     let dir = cwd;
     let prev = "";
     while (dir !== prev) {
-      total += state.claudeMdSizes.get(join(dir, "CLAUDE.md")) ?? 0;
+      const size = state.claudeMdSizes.get(join(dir, "CLAUDE.md")) ?? 0;
+      if (dir === home) break;
+      total += size;
       prev = dir;
       dir = dirname(dir);
     }
-    if (total > 0) perProjectTotals.push(total);
+    if (total > 0) perProject.push({ cwd, estTokens: total });
   }
-  perProjectTotals.sort((a, b) => a - b);
+  perProject.sort((a, b) => b.estTokens - a.estTokens);
+  const perProjectTotals = perProject.map((p) => p.estTokens).sort((a, b) => a - b);
   const medianProject = perProjectTotals.length ? perProjectTotals[Math.floor(perProjectTotals.length / 2)] : 0;
   const maxProject = perProjectTotals.length ? perProjectTotals[perProjectTotals.length - 1] : 0;
   items.push({
@@ -167,6 +171,7 @@ export function buildContextAttribution(state: AnalysisState, contextWindow = 20
 
   return {
     items: items.sort((a, b) => b.estTokens - a.estTokens),
+    claudeMdByProject: perProject.slice(0, 20),
     skillListingBudgetTokens: Math.round(contextWindow * 0.01),
     note: "Disk-based estimates (chars/4) of what a typical session loads before turn one; compare against measured firstTurnContext.",
   };

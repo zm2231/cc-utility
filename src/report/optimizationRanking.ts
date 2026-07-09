@@ -33,15 +33,15 @@ function findToolFriction(report: JsonReport): OptimizationFinding[] {
 function findLowCacheHitRate(report: JsonReport): OptimizationFinding | null {
   const window = report.recentWindow;
   if (!window) return null;
-  const { cacheHitRate, totalCacheRead, totalInput } = window;
-  if (totalCacheRead + totalInput === 0 || cacheHitRate >= LOW_CACHE_HIT_RATE) return null;
+  const { cacheHitRate, totalCacheRead, totalInput, totalCacheCreation } = window;
+  if (totalCacheRead + totalInput + totalCacheCreation === 0 || cacheHitRate >= LOW_CACHE_HIT_RATE) return null;
   return {
     id: "cache-hit-rate",
     headline: `Cache hit rate is only ${(cacheHitRate * 100).toFixed(1)}% over the last ${window.windowDays} days`,
     detail: "Below 90% usually means dynamic content near the top of your prompt or CLAUDE.md is invalidating the cached prefix on every turn.",
     severity: cacheHitRate < 0.75 ? "high" : "medium",
     score: 40 + (LOW_CACHE_HIT_RATE - cacheHitRate) * 100,
-    evidence: { cacheHitRate, totalCacheRead, totalInput, windowDays: window.windowDays, lastActiveDate: window.lastActiveDate },
+    evidence: { cacheHitRate, totalCacheRead, totalInput, totalCacheCreation, windowDays: window.windowDays, lastActiveDate: window.lastActiveDate },
   };
 }
 
