@@ -39,6 +39,7 @@ interface CodexRecord {
         input_tokens?: number;
         cached_input_tokens?: number;
         output_tokens?: number;
+        reasoning_output_tokens?: number;
       };
       model_context_window?: number;
     };
@@ -130,30 +131,23 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
   const state = createCodexState();
   const hourlySamples = new Map<number, CodexRateLimitSample>();
   const sessionIds = new Set<string>();
-  interface SessionAgg {
-    usage: { input: number; cached: number; output: number; reasoning: number };
-    fill: number | null;
-    fillTs: number;
-  }
-  const perSession = new Map<string, SessionAgg>();
 
   for (const file of files) {
     let sessionId = file;
-    let lastUsage: { input: number; cached: number; output: number; reasoning: number } | null = null;
     let lastContextFill: number | null = null;
-    let lastRecordTs = 0;
+    let prevTurnKey = "";
 
     for await (const raw of readRecords(file)) {
       const rec = raw as CodexRecord;
       const ts = rec.timestamp ? Date.parse(rec.timestamp) : NaN;
-      if (minTs && !Number.isNaN(ts) && ts < minTs) continue;
-      if (!Number.isNaN(ts)) {
-        if (state.firstTs === null || ts < state.firstTs) state.firstTs = ts;
-        if (state.lastTs === null || ts > state.lastTs) state.lastTs = ts;
-        lastRecordTs = Math.max(lastRecordTs, ts);
-      }
+      const inWindow = !minTs || Number.isNaN(ts) || ts >= minTs;
       const p = rec.payload;
       if (!p) continue;
+      if (!inWindow && p.type !== "token_count") continue;
+      if (inWindow && !Number.isNaN(ts)) {
+        if (state.firstTs === null || ts < state.firstTs) state.firstTs = ts;
+        if (state.lastTs === null || ts > state.lastTs) state.lastTs = ts;
+      }
 
       if (rec.type === "session_meta") {
         if (typeof p.id === "string" && p.id) sessionId = p.id;
@@ -197,29 +191,36 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
         else if (p.type === "task_complete") state.turnsCompleted += 1;
         else if (p.type === "token_count") {
           const turn = p.info?.last_token_usage;
-          if (turn && !Number.isNaN(ts)) {
-            const dateKey = new Date(ts).toISOString().slice(0, 10);
-            const day = state.daily.get(dateKey) ?? { input: 0, output: 0 };
-            day.input += safeNum(turn.input_tokens);
-            day.output += safeNum(turn.output_tokens);
-            state.daily.set(dateKey, day);
-          }
-          const usage = p.info?.total_token_usage;
-          if (usage) {
-            lastUsage = {
-              input: safeNum(usage.input_tokens),
-              cached: safeNum(usage.cached_input_tokens),
-              output: safeNum(usage.output_tokens),
-              reasoning: safeNum(usage.reasoning_output_tokens),
+          if (turn) {
+            const t = {
+              input: safeNum(turn.input_tokens),
+              cached: safeNum(turn.cached_input_tokens),
+              output: safeNum(turn.output_tokens),
+              reasoning: safeNum(turn.reasoning_output_tokens),
             };
+            const key = `${t.input}|${t.cached}|${t.output}|${t.reasoning}`;
+            const isRepeat = key === prevTurnKey;
+            prevTurnKey = key;
+            if (inWindow && !isRepeat) {
+              state.totalInput += t.input;
+              state.totalCachedInput += t.cached;
+              state.totalOutput += t.output;
+              state.totalReasoningOutput += t.reasoning;
+              if (!Number.isNaN(ts)) {
+                const dateKey = new Date(ts).toISOString().slice(0, 10);
+                const day = state.daily.get(dateKey) ?? { input: 0, output: 0 };
+                day.input += t.input;
+                day.output += t.output;
+                state.daily.set(dateKey, day);
+              }
+            }
             const window = safeNum(p.info?.model_context_window);
-            const liveContext = safeNum(p.info?.last_token_usage?.input_tokens);
-            if (window > 0 && liveContext > 0) {
-              lastContextFill = liveContext / window;
+            if (inWindow && window > 0 && t.input > 0) {
+              lastContextFill = t.input / window;
             }
           }
           const rl = p.rate_limits;
-          if (rl && !Number.isNaN(ts)) {
+          if (inWindow && rl && !Number.isNaN(ts)) {
             const primaryPct = typeof rl.primary?.used_percent === "number" ? rl.primary.used_percent : null;
             const secondaryPct = typeof rl.secondary?.used_percent === "number" ? rl.secondary.used_percent : null;
             if (primaryPct !== null) state.peakPrimaryPct = Math.max(state.peakPrimaryPct, primaryPct);
@@ -235,30 +236,8 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
       }
     }
 
-    if (lastUsage) {
-      const agg = perSession.get(sessionId);
-      if (!agg) {
-        perSession.set(sessionId, { usage: lastUsage, fill: lastContextFill, fillTs: lastRecordTs });
-      } else {
-        agg.usage.input = Math.max(agg.usage.input, lastUsage.input);
-        agg.usage.cached = Math.max(agg.usage.cached, lastUsage.cached);
-        agg.usage.output = Math.max(agg.usage.output, lastUsage.output);
-        agg.usage.reasoning = Math.max(agg.usage.reasoning, lastUsage.reasoning);
-        if (lastContextFill !== null && lastRecordTs >= agg.fillTs) {
-          agg.fill = lastContextFill;
-          agg.fillTs = lastRecordTs;
-        }
-      }
-    }
+    if (lastContextFill !== null) state.contextWindowFillRatios.push(lastContextFill);
     state.filesScanned += 1;
-  }
-
-  for (const agg of perSession.values()) {
-    state.totalInput += agg.usage.input;
-    state.totalCachedInput += agg.usage.cached;
-    state.totalOutput += agg.usage.output;
-    state.totalReasoningOutput += agg.usage.reasoning;
-    if (agg.fill !== null) state.contextWindowFillRatios.push(agg.fill);
   }
 
   state.rateLimitSamples = [...hourlySamples.values()].sort((a, b) => a.ts - b.ts);

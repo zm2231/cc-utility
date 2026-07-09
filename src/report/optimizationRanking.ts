@@ -108,13 +108,17 @@ function findStaleContext(report: JsonReport): OptimizationFinding | null {
 function findRejectedToolUse(report: JsonReport): OptimizationFinding | null {
   const count = report.governance.rejectedToolUseCount;
   if (count < 5) return null;
+  const byKind = report.denials?.byKind ?? {};
+  const kindNote = Object.keys(byKind).length
+    ? ` Where the CLI stamped a reason (newer sessions): ${Object.entries(byKind).map(([k, v]) => `${k} ×${v}`).join(", ")}.`
+    : "";
   return {
     id: "rejected-tool-use",
-    headline: `${count} tool calls rejected outright`,
-    detail: "Repeated rejections in one session usually mean the agent should have stopped and asked, not retried.",
+    headline: `${count} of the model's tool calls were denied (by you or by permission rules)`,
+    detail: `These are calls the model attempted that the permission layer or you blocked; the model never denies itself.${kindNote} Repeated denials of the same command in one session mean the agent kept retrying something it should have asked about; see the denial patterns table for which commands.`,
     severity: count >= 30 ? "high" : "medium",
     score: 20 + Math.min(count, 200) / 4,
-    evidence: { rejectedToolUseCount: count, toolResultCount: report.governance.toolResultCount },
+    evidence: { rejectedToolUseCount: count, toolResultCount: report.governance.toolResultCount, stampedByKind: byKind, topPatterns: report.denials?.topPatterns?.slice(0, 5) ?? [] },
   };
 }
 
@@ -131,16 +135,21 @@ function findLongTurns(report: JsonReport): OptimizationFinding | null {
   };
 }
 
-function findRateLimitCrossings(report: JsonReport): OptimizationFinding | null {
+function findRateLimitSaturation(report: JsonReport): OptimizationFinding | null {
   const crossings = report.rateLimitTrends?.thresholdCrossings ?? [];
-  if (!crossings.length) return null;
+  const saturated = crossings.filter((c) => c.pct >= 100);
+  const codexPeak = report.codex ? Math.max(report.codex.rateLimits.peakPrimaryPct, report.codex.rateLimits.peakSecondaryPct) : 0;
+  if (!saturated.length && codexPeak < 100) return null;
+  const parts: string[] = [];
+  if (saturated.length) parts.push(`Claude ${saturated.length} time(s)`);
+  if (codexPeak >= 100) parts.push("Codex at peak");
   return {
-    id: "rate-limit-crossings",
-    headline: `Crossed 80% rate-limit utilization ${crossings.length} time(s)`,
-    detail: `Most recently: ${crossings[crossings.length - 1].window === "five_hour" ? "5-hour" : "7-day"} window at ${crossings[crossings.length - 1].pct}%.`,
-    severity: crossings.length >= 3 ? "high" : "medium",
-    score: 45 + crossings.length * 5,
-    evidence: { crossings },
+    id: "rate-limit-saturation",
+    headline: `Hit 100% rate-limit utilization (${parts.join(", ")}) and got locked out`,
+    detail: "High utilization means you're getting full value from the subscription; only the lockouts cost you. If they land at bad times, shift heavy batch/background work to off-peak hours or split it across the week.",
+    severity: "medium",
+    score: 40 + saturated.length * 5,
+    evidence: { saturatedCrossings: saturated, codexPeakPrimaryPct: report.codex?.rateLimits.peakPrimaryPct ?? null, codexPeakSecondaryPct: report.codex?.rateLimits.peakSecondaryPct ?? null },
   };
 }
 
@@ -229,7 +238,7 @@ const SINGLE_FINDERS: Array<(report: JsonReport) => OptimizationFinding | null> 
   findStaleContext,
   findRejectedToolUse,
   findLongTurns,
-  findRateLimitCrossings,
+  findRateLimitSaturation,
   findHotFile,
 ];
 

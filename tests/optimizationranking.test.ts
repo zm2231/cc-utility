@@ -127,11 +127,16 @@ test("stale-context finding carries real session IDs as evidence, not a summary 
   assert.equal((finding.evidence.sessions as any[])[0].sessionId, "real-session-abc");
 });
 
-test("rate-limit crossings finding reads from rateLimitTrends when present", () => {
-  const report = baseReport({
+test("sub-100% rate-limit crossings are not findings; only actual saturation is flagged", () => {
+  const below = baseReport({
     rateLimitTrends: { thresholdCrossings: [{ window: "seven_day", ts: "2026-06-01T00:00:00Z", pct: 85 }] },
   });
-  const finding = buildOptimizationRanking(report).find((f) => f.id === "rate-limit-crossings");
+  assert.equal(buildOptimizationRanking(below).find((f) => f.id === "rate-limit-saturation"), undefined);
+
+  const saturated = baseReport({
+    rateLimitTrends: { thresholdCrossings: [{ window: "seven_day", ts: "2026-06-01T00:00:00Z", pct: 100 }] },
+  });
+  const finding = buildOptimizationRanking(saturated).find((f) => f.id === "rate-limit-saturation");
   assert.ok(finding);
-  assert.match(finding!.headline, /80%/);
+  assert.match(finding!.headline, /100%/);
 });

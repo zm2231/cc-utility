@@ -369,14 +369,38 @@ function viewClaude(){
     +'<div class="cols2"><div><h2>Skills the model invoked</h2>'+barList(skills)+'</div><div><h2>Slash commands you typed</h2>'+barList(slashes)+'</div></div>';
 }
 
-function viewCodex(){
+var rlState={days:90};
+
+function rlChartHtml(){
   var cx=R.codex;
-  if(!cx)return '<h1>Codex</h1><p class="empty">No ~/.codex/sessions found (or scan skipped with --no-codex).</p>';
   var series=cx.rateLimits.series||[];
+  if(rlState.days){
+    var cutoff=Date.now()-rlState.days*86400000;
+    series=series.filter(function(s){return s.ts>=cutoff});
+  }
+  var controls='<div class="chart-controls"><div class="seg">'+[[30,'30d'],[90,'90d'],[0,'All']].map(function(o){return '<button data-days="'+o[0]+'" class="'+(rlState.days===o[0]?'on':'')+'">'+o[1]+'</button>'}).join('')+'</div></div>';
   var chart=series.length>=2?lineChart([
     {name:'5-hour window %',points:series.filter(function(s){return s.primaryPct!==null}).map(function(s){return {x:new Date(s.ts).toISOString().slice(0,10),y:s.primaryPct}})},
     {name:'weekly window %',secondary:true,points:series.filter(function(s){return s.secondaryPct!==null}).map(function(s){return {x:new Date(s.ts).toISOString().slice(0,10),y:s.secondaryPct}})}
-  ],'%'):'<p class="empty">No rate-limit history.</p>';
+  ],'%'):'<p class="empty">No rate-limit samples in this range.</p>';
+  return controls+chart;
+}
+
+function wireRlControls(root){
+  root.querySelectorAll('#rl-chart .chart-controls button').forEach(function(b){
+    b.addEventListener('click',function(){
+      rlState.days=Number(b.getAttribute('data-days'));
+      var host=document.getElementById('rl-chart');
+      host.innerHTML=rlChartHtml();
+      wireCharts(host);wireRlControls(document);
+    });
+  });
+}
+
+function viewCodex(){
+  var cx=R.codex;
+  if(!cx)return '<h1>Codex</h1><p class="empty">No ~/.codex/sessions found (or scan skipped with --no-codex).</p>';
+  var chart='<div id="rl-chart">'+rlChartHtml()+'</div>';
   var models=Object.entries(cx.models).map(function(e){return {label:e[0],value:fmtN(e[1]),share:e[1]}});
   var tools=Object.entries(cx.toolCalls).map(function(e){return {label:e[0],value:fmtN(e[1]),share:e[1]}});
   var execs=Object.entries(cx.execCommandHeads).map(function(e){return {label:e[0],value:fmtN(e[1]),share:e[1]}});
@@ -406,7 +430,7 @@ function route(){
   if(!VIEWS[tab])tab='home';
   var main=document.getElementById('app');
   main.innerHTML=VIEWS[tab]();
-  wireCharts(main);wireHeatmap(main);wireChartControls(main);
+  wireCharts(main);wireHeatmap(main);wireChartControls(main);wireRlControls(main);
   document.querySelectorAll('.tab').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-tab')===tab)});
   window.scrollTo(0,0);
 }

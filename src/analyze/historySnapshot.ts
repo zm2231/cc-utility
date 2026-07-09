@@ -178,6 +178,7 @@ export function readHistory(filePath: string): DailySnapshot[] {
 }
 
 export function writeHistory(filePath: string, snapshots: DailySnapshot[]): void {
+  if (!snapshots.length && existsSync(filePath)) return;
   const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
 
   const dir = dirname(filePath);

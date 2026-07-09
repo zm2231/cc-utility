@@ -200,8 +200,8 @@ test("scanCodex aggregates session meta, models, tools, exec heads, final usage,
     { timestamp: "2026-07-01T00:00:02.000Z", type: "response_item", payload: { type: "function_call", name: "exec_command", arguments: JSON.stringify({ cmd: "git status --short" }) } },
     { timestamp: "2026-07-01T00:00:03.000Z", type: "response_item", payload: { type: "function_call", name: "list_projects", arguments: "{}" } },
     { timestamp: "2026-07-01T00:00:04.000Z", type: "event_msg", payload: { type: "user_message", message: "hi" } },
-    { timestamp: "2026-07-01T00:00:05.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 1000, cached_input_tokens: 600, output_tokens: 50, reasoning_output_tokens: 10 }, last_token_usage: { input_tokens: 1000, output_tokens: 50 }, model_context_window: 10000 }, rate_limits: { primary: { used_percent: 5 }, secondary: { used_percent: 12 }, plan_type: "pro" } } },
-    { timestamp: "2026-07-01T00:10:06.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 2000, cached_input_tokens: 1500, output_tokens: 120, reasoning_output_tokens: 30 }, last_token_usage: { input_tokens: 1200, output_tokens: 70 }, model_context_window: 10000 }, rate_limits: { primary: { used_percent: 6 }, secondary: { used_percent: 12 } } } },
+    { timestamp: "2026-07-01T00:00:05.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 1000 }, last_token_usage: { input_tokens: 1000, cached_input_tokens: 600, output_tokens: 50, reasoning_output_tokens: 10 }, model_context_window: 10000 }, rate_limits: { primary: { used_percent: 5 }, secondary: { used_percent: 12 }, plan_type: "pro" } } },
+    { timestamp: "2026-07-01T00:10:06.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 2200 }, last_token_usage: { input_tokens: 1200, cached_input_tokens: 900, output_tokens: 70, reasoning_output_tokens: 20 }, model_context_window: 10000 }, rate_limits: { primary: { used_percent: 6 }, secondary: { used_percent: 12 } } } },
     { timestamp: "2026-07-01T00:10:07.000Z", type: "event_msg", payload: { type: "task_complete" } },
     { timestamp: "2026-07-01T00:10:08.000Z", type: "session_meta", payload: { id: "sess1", cwd: "/repo/x", originator: "codex_exec" } },
   ];
@@ -210,7 +210,7 @@ test("scanCodex aggregates session meta, models, tools, exec heads, final usage,
   const state = await scanCodex([file]);
   assert.ok(state);
   assert.equal(state.sessions, 1);
-  assert.equal(state.totalInput, 2000);
+  assert.equal(state.totalInput, 2200);
   assert.equal(state.totalCachedInput, 1500);
   assert.equal(state.totalOutput, 120);
   assert.equal(state.models.get("gpt-5.5"), 1);
@@ -228,7 +228,37 @@ test("scanCodex returns null for an empty file list", async () => {
   assert.equal(await scanCodex([]), null);
 });
 
-test("resumed Codex sessions across files count once and take max cumulative totals, not the sum", async () => {
+
+test("consecutive identical last_token_usage events are counted once", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ccu-codex-dupe-"));
+  const file = join(dir, "rollout-dupe.jsonl");
+  const evt = { type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 500 }, last_token_usage: { input_tokens: 500, output_tokens: 20 } } } };
+  writeFileSync(
+    file,
+    [
+      { timestamp: "2026-07-01T00:00:00.000Z", type: "session_meta", payload: { id: "d1", cwd: "/r" } },
+      { timestamp: "2026-07-01T00:01:00.000Z", ...evt },
+      { timestamp: "2026-07-01T00:01:05.000Z", ...evt },
+    ]
+      .map((l) => JSON.stringify(l))
+      .join("\n") + "\n",
+  );
+  const state = await scanCodex([file]);
+  assert.ok(state);
+  assert.equal(state.totalInput, 500);
+  assert.equal(state.totalOutput, 20);
+});
+test("writeHistory refuses to replace an existing history file with an empty snapshot set", async () => {
+  const { writeHistory, readHistory } = await import("../src/analyze/historySnapshot.js");
+  const dir = mkdtempSync(join(tmpdir(), "ccu-hist-"));
+  const file = join(dir, "history.jsonl");
+  const snap = { date: "2026-07-01", ts: "2026-07-01T23:59:59.999Z", sessionsScanned: 1, totalInput: 1, totalOutput: 1, totalCacheRead: 0, totalCacheCreation: 0, cacheHitRate: 0, toolErrorRate: 0, worstToolFrictionRate: 0, compactionMedianRetained: 0, turnDurationMedianMs: 0, agentToolCalls: 0, bashShare: 0, queueEnqueueCount: 0 };
+  writeHistory(file, [snap]);
+  writeHistory(file, []);
+  assert.equal(readHistory(file).length, 1);
+});
+
+test("Codex totals sum per-turn last_token_usage across files; session ids still dedupe", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ccu-codex-resume-"));
   const fileA = join(dir, "rollout-a.jsonl");
   const fileB = join(dir, "rollout-b.jsonl");
@@ -236,7 +266,7 @@ test("resumed Codex sessions across files count once and take max cumulative tot
     fileA,
     [
       { timestamp: "2026-07-01T00:00:00.000Z", type: "session_meta", payload: { id: "s1", cwd: "/r" } },
-      { timestamp: "2026-07-01T00:01:00.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 100, cached_input_tokens: 50, output_tokens: 10, reasoning_output_tokens: 1 }, last_token_usage: { input_tokens: 100 }, model_context_window: 1000 } } },
+      { timestamp: "2026-07-01T00:01:00.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 100 }, last_token_usage: { input_tokens: 100, output_tokens: 10 }, model_context_window: 1000 } } },
     ]
       .map((l) => JSON.stringify(l))
       .join("\n") + "\n",
@@ -245,7 +275,7 @@ test("resumed Codex sessions across files count once and take max cumulative tot
     fileB,
     [
       { timestamp: "2026-07-01T01:00:00.000Z", type: "session_meta", payload: { id: "s1", cwd: "/r" } },
-      { timestamp: "2026-07-01T01:01:00.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 150, cached_input_tokens: 80, output_tokens: 25, reasoning_output_tokens: 2 }, last_token_usage: { input_tokens: 400 }, model_context_window: 1000 } } },
+      { timestamp: "2026-07-01T01:01:00.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 150 }, last_token_usage: { input_tokens: 400, output_tokens: 25 }, model_context_window: 1000 } } },
     ]
       .map((l) => JSON.stringify(l))
       .join("\n") + "\n",
@@ -253,10 +283,28 @@ test("resumed Codex sessions across files count once and take max cumulative tot
   const state = await scanCodex([fileA, fileB]);
   assert.ok(state);
   assert.equal(state.sessions, 1);
-  assert.equal(state.totalInput, 150);
-  assert.equal(state.totalOutput, 25);
-  assert.equal(state.contextWindowFillRatios.length, 1);
-  assert.ok(Math.abs(state.contextWindowFillRatios[0] - 0.4) < 1e-9);
+  assert.equal(state.totalInput, 500);
+  assert.equal(state.totalOutput, 35);
+  assert.equal(state.contextWindowFillRatios.length, 2);
+});
+
+test("--since window excludes pre-cutoff Codex usage even within one session's cumulative counter", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ccu-codex-since-"));
+  const file = join(dir, "rollout-window.jsonl");
+  writeFileSync(
+    file,
+    [
+      { timestamp: "2026-06-01T00:00:00.000Z", type: "session_meta", payload: { id: "w1", cwd: "/r" } },
+      { timestamp: "2026-06-01T00:01:00.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 1000 }, last_token_usage: { input_tokens: 1000, output_tokens: 40 } } } },
+      { timestamp: "2026-07-01T00:00:00.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 1100 }, last_token_usage: { input_tokens: 100, output_tokens: 10 } } } },
+    ]
+      .map((l) => JSON.stringify(l))
+      .join("\n") + "\n",
+  );
+  const state = await scanCodex([file], Date.parse("2026-06-15T00:00:00.000Z"));
+  assert.ok(state);
+  assert.equal(state.totalInput, 100);
+  assert.equal(state.totalOutput, 10);
 });
 
 test("rate-limit hourly downsampling keeps the latest-by-timestamp sample and peaks survive downsampling", async () => {
