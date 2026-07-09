@@ -121,7 +121,8 @@ function tableHtml(headers,rows,numeric,cap){
   if(!rows.length)return '<p class="empty">Nothing recorded.</p>';
   numeric=numeric||{};
   var head='<tr>'+headers.map(function(h,i){return '<th'+(numeric[i]?' class="num"':'')+'>'+esc(h)+'</th>'}).join('')+'</tr>';
-  function render(list){return list.map(function(r){return '<tr>'+r.map(function(c,i){return '<td'+(numeric[i]?' class="num"':'')+'>'+c+'</td>'}).join('')+'</tr>'}).join('')}
+  function cellHtml(c){return (c&&typeof c==='object'&&c.html!==undefined)?c.html:esc(c)}
+  function render(list){return list.map(function(r){return '<tr>'+r.map(function(c,i){return '<td'+(numeric[i]?' class="num"':'')+'>'+cellHtml(c)+'</td>'}).join('')+'</tr>'}).join('')}
   var out='<table><thead>'+head+'</thead><tbody>'+render(rows.slice(0,cap))+'</tbody></table>';
   if(rows.length>cap){
     var id='t'+Math.random().toString(36).slice(2);
@@ -240,8 +241,11 @@ function wireHeatmap(root){
         } else lines.push('no activity');
         tip.innerHTML=lines.join('<br>');tip.style.display='';
         var rect=wrap.getBoundingClientRect();
-        var lx=ev.clientX-rect.left+14;if(lx>rect.width-220)lx=rect.width-220;
-        tip.style.left=lx+'px';tip.style.top=(ev.clientY-rect.top-40)+'px';
+        var lx=ev.clientX-rect.left+14;
+        lx=Math.max(4,Math.min(lx,rect.width-tip.offsetWidth-8));
+        var ly=ev.clientY-rect.top-tip.offsetHeight-10;
+        if(ly<0)ly=ev.clientY-rect.top+16;
+        tip.style.left=lx+'px';tip.style.top=ly+'px';
       });
       r.addEventListener('mouseleave',function(){tip.style.display='none'});
     });
@@ -256,7 +260,14 @@ function dailyChartHtml(){
     return {out:d.claudeOut+d.codexOut,inp:d.claudeIn+d.codexIn};
   }
   if(chartState.view==='heat'){
-    return heatmap(days.map(function(d){var v=val(d);return {date:d.date,v:v.out+v.inp}}));
+    var firstClaude=HISTORY.length?HISTORY[0].date:null;
+    var cxDaily=(R.codex&&R.codex.daily)||[];
+    var firstCodex=cxDaily.length?cxDaily[0].date:null;
+    var cover=[];
+    if(firstClaude)cover.push('Claude Code data since '+firstClaude+' (older transcripts are no longer on disk)');
+    if(firstCodex)cover.push('Codex since '+firstCodex);
+    return heatmap(days.map(function(d){var v=val(d);return {date:d.date,v:v.out+v.inp}}))
+      +(cover.length?'<p class="hint">'+esc(cover.join(' · '))+'</p>':'');
   }
   var recent=days.slice(-90);
   return lineChart([
@@ -334,9 +345,9 @@ function viewClaude(){
   var tools=Object.entries(R.toolCalls).sort(function(a,b){return b[1]-a[1]}).map(function(e){return {label:shortTool(e[0]),value:fmtN(e[1]),share:e[1]}});
   var attr=R.contextAttribution;
   var attrRows=attr?attr.items.map(function(i){return {label:i.component,value:fmtC(i.estTokens)+' tok',share:i.estTokens}}):[];
-  var frictionRows=R.toolFriction.filter(function(r){return r.errorRate>=0.25}).map(function(r){return [esc(shortTool(r.tool)),(r.errorRate*100).toFixed(0)+'%',r.errors+'/'+r.results]});
-  var denialRows=R.denials.topPatterns.map(function(r){return [esc(r.pattern),fmtN(r.count),'<span class="muted">'+esc(Object.entries(r.kinds).map(function(e){return e[0]+' ×'+e[1]}).join(', '))+'</span>']});
-  var hookRows=R.hooks.rows.map(function(r){return [esc(r.hook)+(r.timeouts?' <span class="pill">'+r.timeouts+' timeouts</span>':''),fmtN(r.count),fmtN(r.medianMs)+'ms',(r.totalWaitMs/60000).toFixed(1)+'min']});
+  var frictionRows=R.toolFriction.filter(function(r){return r.errorRate>=0.25}).map(function(r){return [shortTool(r.tool),(r.errorRate*100).toFixed(0)+'%',r.errors+'/'+r.results]});
+  var denialRows=R.denials.topPatterns.map(function(r){return [r.pattern,fmtN(r.count),{html:'<span class="muted">'+esc(Object.entries(r.kinds).map(function(e){return e[0]+' ×'+e[1]}).join(', '))+'</span>'}]});
+  var hookRows=R.hooks.rows.map(function(r){return [{html:esc(r.hook)+(r.timeouts?' <span class="pill">'+Number(r.timeouts)+' timeouts</span>':'')},fmtN(r.count),fmtN(r.medianMs)+'ms',(r.totalWaitMs/60000).toFixed(1)+'min']});
   var skills=Object.entries(R.skillsInvokedByModel).sort(function(a,b){return b[1]-a[1]}).map(function(e){return {label:e[0],value:fmtN(e[1]),share:e[1]}});
   var slashes=Object.entries(R.slashCommandsTyped).sort(function(a,b){return b[1]-a[1]}).map(function(e){return {label:'/'+e[0],value:fmtN(e[1]),share:e[1]}});
   return '<h1>Claude Code</h1><div class="meta">'+fmtN(R.sessionsScanned)+' sessions · '+fmtC(R.tokens.totalOutput)+' output tokens</div>'
@@ -382,8 +393,8 @@ function viewCodex(){
 }
 
 function viewProjects(){
-  var rows=R.projects.map(function(r){return ['<span title="'+esc(r.cwd)+'">'+esc(r.cwd.split('/').slice(-2).join('/'))+'</span>',fmtC(r.output),fmtC(r.toolCalls),fmtN(r.sessions)]});
-  var cxRows=R.codex?Object.entries(R.codex.workspaces).map(function(e){return ['<span title="'+esc(e[0])+'">'+esc(e[0].split('/').slice(-2).join('/'))+'</span>',fmtN(e[1])]}):[];
+  var rows=R.projects.map(function(r){return [{html:'<span title="'+esc(r.cwd)+'">'+esc(r.cwd.split('/').slice(-2).join('/'))+'</span>'},fmtC(r.output),fmtC(r.toolCalls),fmtN(r.sessions)]});
+  var cxRows=R.codex?Object.entries(R.codex.workspaces).map(function(e){return [{html:'<span title="'+esc(e[0])+'">'+esc(e[0].split('/').slice(-2).join('/'))+'</span>'},fmtN(e[1])]}):[];
   return '<h1>Projects</h1><div class="meta">'+fmtN(R.workspaceCount)+' workspaces seen · '+pct(R.sidechain.outputShare)+' of output produced by subagents</div>'
     +'<h2>Claude Code<span class="sum">by output tokens</span></h2>'+tableHtml(['Project','Output','Tool calls','Sessions'],rows,{1:1,2:1,3:1},12)
     +(cxRows.length?'<h2>Codex<span class="sum">by sessions</span></h2>'+tableHtml(['Project','Sessions'],cxRows,{1:1},12):'');

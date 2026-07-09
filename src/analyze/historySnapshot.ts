@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { percentile, type AnalysisState, type DayBucket } from "./state.js";
@@ -184,7 +184,16 @@ export function writeHistory(filePath: string, snapshots: DailySnapshot[]): void
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
   const body = sorted.map((s) => JSON.stringify(s)).join("\n") + "\n";
-  writeFileSync(filePath, body);
+  const tmpPath = join(dir, `.history-${process.pid}-${Date.now()}.tmp`);
+  try {
+    writeFileSync(tmpPath, body);
+    renameSync(tmpPath, filePath);
+  } catch (err) {
+    try {
+      rmSync(tmpPath, { force: true });
+    } catch {}
+    throw err;
+  }
 }
 
 const CSV_COLUMNS: Array<keyof DailySnapshot> = [
