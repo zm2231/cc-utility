@@ -132,6 +132,7 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
   const hourlySamples = new Map<number, CodexRateLimitSample>();
   const sessionIds = new Set<string>();
   const prevTurnKeyBySession = new Map<string, string>();
+  const seenTurnEventsBySession = new Map<string, Set<string>>();
   const fillBySession = new Map<string, { fill: number; ts: number }>();
 
   for (const file of files) {
@@ -199,8 +200,15 @@ export async function scanCodex(files: string[], minTs = 0): Promise<CodexState 
               reasoning: safeNum(turn.reasoning_output_tokens),
             };
             const key = `${t.input}|${t.cached}|${t.output}|${t.reasoning}`;
-            const isRepeat = key === prevTurnKeyBySession.get(sessionId);
+            let seen = seenTurnEventsBySession.get(sessionId);
+            if (!seen) {
+              seen = new Set();
+              seenTurnEventsBySession.set(sessionId, seen);
+            }
+            const eventId = `${rec.timestamp ?? ""}|${key}`;
+            const isRepeat = key === prevTurnKeyBySession.get(sessionId) || seen.has(eventId);
             prevTurnKeyBySession.set(sessionId, key);
+            seen.add(eventId);
             if (inWindow && !isRepeat) {
               state.totalInput += t.input;
               state.totalCachedInput += t.cached;

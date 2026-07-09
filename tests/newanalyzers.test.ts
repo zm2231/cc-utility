@@ -296,6 +296,44 @@ test("mergeHistory preserves old days a partial rescan no longer sees; fuller pa
   assert.deepEqual(today.map((s) => [s.date, s.totalOutput]), [["2026-07-09", 10]]);
 });
 
+test("replayed A,B,A turn events across rollout files count each distinct turn once", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ccu-codex-replay-"));
+  const evtA = { timestamp: "2026-07-01T00:01:00.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 100 }, last_token_usage: { input_tokens: 100, output_tokens: 10 } } } };
+  const evtB = { timestamp: "2026-07-01T00:02:00.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 300 }, last_token_usage: { input_tokens: 200, output_tokens: 20 } } } };
+  const fileA = join(dir, "rollout-a.jsonl");
+  const fileB = join(dir, "rollout-b.jsonl");
+  writeFileSync(fileA, [
+    { timestamp: "2026-07-01T00:00:00.000Z", type: "session_meta", payload: { id: "rp1", cwd: "/r" } },
+    evtA,
+    evtB,
+  ].map((l) => JSON.stringify(l)).join("\n") + "\n");
+  writeFileSync(fileB, [
+    { timestamp: "2026-07-01T01:00:00.000Z", type: "session_meta", payload: { id: "rp1", cwd: "/r" } },
+    evtA,
+  ].map((l) => JSON.stringify(l)).join("\n") + "\n");
+  const state = await scanCodex([fileA, fileB]);
+  assert.ok(state);
+  assert.equal(state.totalInput, 300);
+  assert.equal(state.totalOutput, 30);
+  assert.equal(state.daily.get("2026-07-01")?.input, 300);
+});
+
+test("distinct turns with identical usage but different timestamps both count", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ccu-codex-samecost-"));
+  const file = join(dir, "rollout-samecost.jsonl");
+  const usage = { total_token_usage: { input_tokens: 100 }, last_token_usage: { input_tokens: 100, output_tokens: 10 } };
+  writeFileSync(file, [
+    { timestamp: "2026-07-01T00:00:00.000Z", type: "session_meta", payload: { id: "sc1", cwd: "/r" } },
+    { timestamp: "2026-07-01T00:01:00.000Z", type: "event_msg", payload: { type: "token_count", info: usage } },
+    { timestamp: "2026-07-01T00:02:00.000Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 250 }, last_token_usage: { input_tokens: 150, output_tokens: 15 } } } },
+    { timestamp: "2026-07-01T00:03:00.000Z", type: "event_msg", payload: { type: "token_count", info: usage } },
+  ].map((l) => JSON.stringify(l)).join("\n") + "\n");
+  const state = await scanCodex([file]);
+  assert.ok(state);
+  assert.equal(state.totalInput, 350);
+  assert.equal(state.totalOutput, 35);
+});
+
 test("writeHistory refuses to replace an existing history file with an empty snapshot set", async () => {
   const { writeHistory, readHistory } = await import("../src/analyze/historySnapshot.js");
   const dir = mkdtempSync(join(tmpdir(), "ccu-hist-"));

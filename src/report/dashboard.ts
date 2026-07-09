@@ -379,9 +379,10 @@ function rlChartHtml(){
     series=series.filter(function(s){return s.ts>=cutoff});
   }
   var controls='<div class="chart-controls"><div class="seg">'+[[30,'30d'],[90,'90d'],[0,'All']].map(function(o){return '<button data-days="'+o[0]+'" class="'+(rlState.days===o[0]?'on':'')+'">'+o[1]+'</button>'}).join('')+'</div></div>';
+  var rlx=function(s){return new Date(s.ts).toISOString().slice(0,13).replace('T',' ')+'h'};
   var chart=series.length>=2?lineChart([
-    {name:'5-hour window %',points:series.filter(function(s){return s.primaryPct!==null}).map(function(s){return {x:new Date(s.ts).toISOString().slice(0,10),y:s.primaryPct}})},
-    {name:'weekly window %',secondary:true,points:series.filter(function(s){return s.secondaryPct!==null}).map(function(s){return {x:new Date(s.ts).toISOString().slice(0,10),y:s.secondaryPct}})}
+    {name:'5-hour window %',points:series.filter(function(s){return s.primaryPct!==null}).map(function(s){return {x:rlx(s),y:s.primaryPct}})},
+    {name:'weekly window %',secondary:true,points:series.filter(function(s){return s.secondaryPct!==null}).map(function(s){return {x:rlx(s),y:s.secondaryPct}})}
   ],'%'):'<p class="empty">No rate-limit samples in this range.</p>';
   return controls+chart;
 }
