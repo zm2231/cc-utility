@@ -104,9 +104,8 @@ def main() -> None:
     p.add_argument("--boot", type=int, default=200)
     args = p.parse_args()
 
-    all_renders = load_renders(args.sidecar)
-    primary, accounts = tag_accounts(all_renders)
-    renders, events = select_period(all_renders, load_events(args.projects), args.since, args.until)
+    renders, events = select_period(load_renders(args.sidecar), load_events(args.projects), args.since, args.until)
+    primary, accounts = tag_accounts(renders)
     print(f"period {_day(args.since)} to {_day(args.until)} (exclusive)")
     print(f"renders {len(renders)}, sessions primary/other "
           f"{sum(v == 'primary' for v in accounts.values())}/{sum(v == 'other' for v in accounts.values())}, "
