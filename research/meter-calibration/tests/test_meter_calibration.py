@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -200,4 +201,16 @@ def test_cli_rejects_too_few_windows(tmp_path, monkeypatch, capsys):
     (tmp_path / "log.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
     code, err = _run_cli("all", "--since", "2026-07-01", "--until", "2026-07-02", "--sidecar", str(tmp_path / "log.jsonl"),
                          "--projects", str(tmp_path), monkeypatch=monkeypatch, capsys=capsys)
-    assert code == 2 and "only 1 usable 5h windows" in err
+    assert code == 2 and "only 0 usable 5h windows with Claude Code token data in this period (1 with usage %)" in err
+
+
+def test_cli_rejects_windows_without_transcript_tokens(tmp_path, monkeypatch, capsys):
+    rows = [{"ts": f"2026-07-{1 + h // 24:02d}T{h % 24:02d}:00:00Z", "session_id": "p", "five_hour_pct": 10,
+             "five_hour_reset": 3600, "seven_day_pct": 1, "seven_day_reset": 86400 * 9 - h * 3600}
+            for h in range(0, 40 * 6, 6) for _ in range(6)]
+    (tmp_path / "log.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+    (tmp_path / "projects").mkdir()
+    code, err = _run_cli("all", "--since", "2026-07-01", "--until", "2026-07-20", "--sidecar", str(tmp_path / "log.jsonl"),
+                         "--projects", str(tmp_path / "projects"), monkeypatch=monkeypatch, capsys=capsys)
+    m = re.search(r"only 0 usable 5h windows with Claude Code token data in this period \((\d+) with usage %\)", err)
+    assert code == 2 and m and int(m.group(1)) >= 30

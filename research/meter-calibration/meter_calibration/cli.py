@@ -117,8 +117,10 @@ def main() -> None:
           f"{sum(v == 'primary' for v in accounts.values())}/{sum(v == 'other' for v in accounts.values())}, "
           f"claude API calls {len(events)}")
     windows = five_hour_windows(renders, events, primary, accounts)
-    if len(windows) < MIN_WINDOWS:
-        p.error(f"only {len(windows)} usable 5h windows in this period; need at least {MIN_WINDOWS}")
+    with_tokens = sum(any(t.sum() > 0 for t in w.tokens.values()) for w in windows)
+    if with_tokens < MIN_WINDOWS:
+        p.error(f"only {with_tokens} usable 5h windows with Claude Code token data in this period "
+                f"({len(windows)} with usage %); need at least {MIN_WINDOWS}")
     if args.command in ("calibrate", "all"):
         calibrate(windows, five_hour_windows(renders, events, primary, accounts, include_unknown=True), args)
     if args.command in ("rewrites", "all"):
