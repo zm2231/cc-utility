@@ -253,3 +253,19 @@ def test_marker_causes():
     got = [c.cause for c in sorted(rewrites.classify(evs), key=lambda c: c.event.ts)]
     assert got == ["stream start", "after compaction", "tool/agent list changed", "date change",
                    "other prefix change", "after compaction"]
+
+
+def test_markers_do_not_leak_across_transcript_files(tmp_path: Path):
+    sess = tmp_path / "proj" / "sess"
+    (sess / "subagents").mkdir(parents=True)
+    def call(mid, ts):
+        return json.dumps({"timestamp": ts, "message": {
+            "id": mid, "model": "claude-opus-5-5", "usage": {"input_tokens": 1, "output_tokens": 1}}})
+    (tmp_path / "proj" / "sess.jsonl").write_text("\n".join([
+        call("main1", "2026-10-01T00:00:00Z"),
+        json.dumps({"type": "system", "subtype": "compact_boundary"}),
+    ]))
+    (sess / "subagents" / "agent-1.jsonl").write_text(call("sub1", "2026-10-01T00:00:01Z"))
+    main1, sub1 = load_events(tmp_path)
+    assert (main1.stream, main1.markers) == ("main", frozenset())
+    assert (sub1.stream, sub1.markers) == ("agent-1", frozenset())
