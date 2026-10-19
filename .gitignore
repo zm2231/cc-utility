@@ -1,3 +1,8 @@
 node_modules/
 dist/
 *.log
+.todos/
+.DS_Store
+__pycache__/
+.venv/
+.pytest_cache/
