@@ -5,8 +5,12 @@ from pathlib import Path
 import numpy as np
 
 from . import fit, rewrites
-from .load import load_events, load_renders, tag_accounts
-from .windows import five_hour_windows
+from .load import Event, Render, load_events, load_renders, tag_accounts
+from .windows import FIVE_HOURS, five_hour_windows
+
+
+def _utc_date(s: str) -> float:
+    return datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=UTC).timestamp()
 
 
 def _day(ts: float) -> str:
@@ -60,7 +64,7 @@ def calibrate(windows: list, loose_windows: list, args: argparse.Namespace) -> N
 
 
 def rewrite_report(events: list, accounts: dict, windows: list) -> None:
-    start = windows[0].end - 5 * 3600
+    start = windows[0].end - FIVE_HOURS
     evs = [e for e in events if e.ts >= start and accounts.get(e.session_id) == "primary"]
     scales = fit.fit_scales(windows, 0.0).scales
     rep = rewrites.summarize(rewrites.classify(evs), scales)
@@ -84,17 +88,26 @@ def rewrite_report(events: list, accounts: dict, windows: list) -> None:
               f"{np.mean(g < 120):.0%} under 2h, {np.mean(g < 24 * 60):.0%} under a day")
 
 
+def select_period(renders: list[Render], events: list[Event], since: float, until: float) -> tuple[list[Render], list[Event]]:
+    """Events reach back one window before `since`, because the first windows in the period started then."""
+    return ([r for r in renders if since <= r.ts < until],
+            [e for e in events if since - FIVE_HOURS <= e.ts < until])
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("command", choices=("calibrate", "rewrites", "all"))
     p.add_argument("--sidecar", type=Path, default=Path.home() / ".cc-utility" / "sidecar-log.jsonl")
     p.add_argument("--projects", type=Path, default=Path.home() / ".claude" / "projects")
+    p.add_argument("--since", type=_utc_date, required=True, help="UTC date, inclusive (YYYY-MM-DD)")
+    p.add_argument("--until", type=_utc_date, required=True, help="UTC date, exclusive (YYYY-MM-DD)")
     p.add_argument("--boot", type=int, default=200)
     args = p.parse_args()
 
-    renders = load_renders(args.sidecar)
-    primary, accounts = tag_accounts(renders)
-    events = load_events(args.projects)
+    all_renders = load_renders(args.sidecar)
+    primary, accounts = tag_accounts(all_renders)
+    renders, events = select_period(all_renders, load_events(args.projects), args.since, args.until)
+    print(f"period {_day(args.since)} to {_day(args.until)} (exclusive)")
     print(f"renders {len(renders)}, sessions primary/other "
           f"{sum(v == 'primary' for v in accounts.values())}/{sum(v == 'other' for v in accounts.values())}, "
           f"claude API calls {len(events)}")

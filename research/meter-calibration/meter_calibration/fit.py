@@ -77,20 +77,19 @@ def bootstrap_rho(windows: list[Window], n: int = 200, seed: int = 0) -> np.ndar
     return np.percentile(out, [5, 50, 95])
 
 
-FREE_COLUMNS = ("write_5m", "write_1h", "read", "output")
+FREE_COLUMNS = ("fresh", "write_5m", "write_1h", "read", "output")
 
 
 def _free_row(w: Window, families: list[str]) -> list[float]:
     row = []
     for f in families:
         t = w.tokens[f]
-        row += [t[I["fresh"]] + t[I["write_5m"]], t[I["write_1h"]], t[I["read"]], t[I["output"]]]
+        row += [t[I[c]] for c in FREE_COLUMNS]
     return row
 
 
 def free_fit(windows: list[Window], families: list[str], y: np.ndarray | None = None) -> dict[str, dict[str, float]]:
-    """No API ratios assumed: each family gets independent 5m-write (with fresh input), 1h-write, read and output
-    weights in %/Mtok."""
+    """No API ratios assumed: each family gets an independent weight per token type, in %/Mtok."""
     X = np.array([_free_row(w, families) for w in windows]) / 1e6
     k, _ = nnls(X, pcts(windows) if y is None else y)
     n = len(FREE_COLUMNS)

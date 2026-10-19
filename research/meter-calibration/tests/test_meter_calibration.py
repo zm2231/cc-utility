@@ -147,3 +147,25 @@ def test_free_fit_estimates_ratios_without_assuming_them():
 def test_bootstrap_resamples_whole_weeks():
     windows = [Window(end=float(d * 86400), pct=1.0, renders=10) for d in range(21)]
     assert sorted(len(b) for b in fit.week_blocks(windows)) == [7, 7, 7]
+
+
+def test_period_bounds_apply_to_renders_and_events():
+    from meter_calibration.cli import select_period
+    renders = [_render(t, "p", 5.0, t + 100) for t in (99.0, 100.0, 199.0, 200.0)]
+    events = [_ev(t) for t in (100.0 - 5 * 3600 - 1, 100.0 - 5 * 3600, 150.0, 200.0)]
+    r, e = select_period(renders, events, 100.0, 200.0)
+    assert [x.ts for x in r] == [100.0, 199.0]
+    assert [x.ts for x in e] == [100.0 - 5 * 3600, 150.0]
+
+
+def test_free_fit_gives_fresh_input_its_own_weight():
+    rng = np.random.default_rng(4)
+    windows = []
+    for i in range(200):
+        w = Window(end=float(i), pct=0.0, renders=10)
+        w.tokens["opus"][:] = rng.uniform(1e5, 1e6, 5)
+        t = w.tokens["opus"] / 1e6
+        w.pct = float(t @ np.array([7.0, 1.0, 3.0, 0.02, 10.0]))
+        windows.append(w)
+    c = fit.free_fit(windows, ["opus"])["opus"]
+    assert np.allclose(list(c.values()), [7.0, 1.0, 3.0, 0.02, 10.0], rtol=1e-3)

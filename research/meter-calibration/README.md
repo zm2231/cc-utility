@@ -16,13 +16,13 @@ Anthropic publishes no formula. Its help center only says cached content
 - `~/.claude/projects/**/*.jsonl`, including `subagents/`.
 
 ## Run
-
-```bash
-uv run meter-calibration all          # calibrate + rewrite breakdown
-uv run pytest
-```
-
-## Method
+  
+  ```bash
+  uv run meter-calibration all --since YYYY-MM-DD --until YYYY-MM-DD
+  uv run pytest
+  ```
+  
+  ## Method
 
 1. **Windows.** A 5h window is keyed by its absolute reset time. Its usage is
    the highest % a primary-account render reported for it, and only events up
@@ -43,7 +43,7 @@ uv run pytest
    each write type and output per family; separate fits on Opus-dominated and
    Fable-dominated windows; an injection check that adds a known read charge
    to the real usage % and re-estimates it, so every real-world flaw in the
-   data stays in place; a free fit with independent weights per token type.
+   data stays in place; a free fit with an independent weight per token type and family.
 5. **Rewrites.** A call is a cold-cache rewrite when it writes at least 10k
    tokens and reads less than half its context. Cause, in order: first call of
    a transcript stream (session or subagent start), gap beyond the cache TTL
