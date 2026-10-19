@@ -204,12 +204,16 @@ def test_cli_rejects_too_few_windows(tmp_path, monkeypatch, capsys):
     assert code == 2 and "only 0 usable 5h windows with Claude Code token data in this period (1 with usage %)" in err
 
 
-def test_cli_rejects_windows_without_transcript_tokens(tmp_path, monkeypatch, capsys):
+def test_cli_rejects_windows_without_metered_transcript_tokens(tmp_path, monkeypatch, capsys):
     rows = [{"ts": f"2026-07-{1 + h // 24:02d}T{h % 24:02d}:00:00Z", "session_id": "p", "five_hour_pct": 10,
              "five_hour_reset": 3600, "seven_day_pct": 1, "seven_day_reset": 86400 * 9 - h * 3600}
             for h in range(0, 40 * 6, 6) for _ in range(6)]
     (tmp_path / "log.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
-    (tmp_path / "projects").mkdir()
+    sess = tmp_path / "projects" / "proj"
+    sess.mkdir(parents=True)
+    (sess / "p.jsonl").write_text(json.dumps({"timestamp": "2026-07-01T23:30:00Z", "message": {
+        "id": "m1", "model": "claude-opus-5-5", "usage": {"input_tokens": 0, "cache_read_input_tokens": 50_000,
+                                                          "output_tokens": 0}}}))
     code, err = _run_cli("all", "--since", "2026-07-01", "--until", "2026-07-20", "--sidecar", str(tmp_path / "log.jsonl"),
                          "--projects", str(tmp_path / "projects"), monkeypatch=monkeypatch, capsys=capsys)
     m = re.search(r"only 0 usable 5h windows with Claude Code token data in this period \((\d+) with usage %\)", err)

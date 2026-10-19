@@ -6,7 +6,7 @@ import numpy as np
 
 from . import fit, rewrites
 from .load import Event, Render, load_events, load_renders, tag_accounts
-from .windows import FIVE_HOURS, five_hour_windows
+from .windows import COLUMNS, FIVE_HOURS, five_hour_windows
 
 MIN_WINDOWS = 30
 
@@ -117,7 +117,8 @@ def main() -> None:
           f"{sum(v == 'primary' for v in accounts.values())}/{sum(v == 'other' for v in accounts.values())}, "
           f"claude API calls {len(events)}")
     windows = five_hour_windows(renders, events, primary, accounts)
-    with_tokens = sum(any(t.sum() > 0 for t in w.tokens.values()) for w in windows)
+    metered = [COLUMNS.index(c) for c in COLUMNS if c != "read"]
+    with_tokens = sum(any(t[metered].sum() > 0 for t in w.tokens.values()) for w in windows)
     if with_tokens < MIN_WINDOWS:
         p.error(f"only {with_tokens} usable 5h windows with Claude Code token data in this period "
                 f"({len(windows)} with usage %); need at least {MIN_WINDOWS}")
