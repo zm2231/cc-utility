@@ -16,8 +16,8 @@ from meter_calibration.load import (
 from meter_calibration.windows import Window, five_hour_windows
 
 
-def _ev(ts, model="claude-opus-5-5", fresh=0, w5=0, w1=0, read=0, out=0, sid="s", stream="main"):
-    return Event(ts, sid, stream, model, fresh, w5, w1, read, out)
+def _ev(ts, model="claude-opus-5-5", fresh=0, w5=0, w1=0, read=0, out=0, sid="s", stream="main", markers=()):
+    return Event(ts, sid, stream, model, fresh, w5, w1, read, out, frozenset(markers))
 
 
 def test_stale_renders_are_dropped(tmp_path: Path):
@@ -218,3 +218,38 @@ def test_cli_rejects_windows_without_metered_transcript_tokens(tmp_path, monkeyp
                          "--projects", str(tmp_path / "projects"), monkeypatch=monkeypatch, capsys=capsys)
     m = re.search(r"only 0 usable 5h windows with Claude Code token data in this period \((\d+) with usage %\)", err)
     assert code == 2 and m and int(m.group(1)) >= 30
+
+
+def test_markers_attach_to_the_next_call_once(tmp_path: Path):
+    d = tmp_path / "proj"
+    d.mkdir()
+    def call(mid, out):
+        return json.dumps({"timestamp": "2026-10-01T00:00:00Z", "message": {
+            "id": mid, "model": "claude-opus-5-5", "usage": {"input_tokens": 1, "output_tokens": out}}})
+    lines = [
+        json.dumps({"type": "attachment", "attachment": {"type": "deferred_tools_delta"}}),
+        json.dumps({"type": "system", "subtype": "compact_boundary"}),
+        call("m1", 1),
+        json.dumps({"type": "attachment", "attachment": {"type": "date_change"}}),
+        call("m1", 9),
+        call("m2", 1),
+    ]
+    (d / "s.jsonl").write_text("\n".join(lines))
+    m1, m2 = load_events(tmp_path)
+    assert m1.output == 9
+    assert m1.markers == {"attachment:deferred_tools_delta", "system:compact_boundary"}
+    assert m2.markers == {"attachment:date_change"}
+
+
+def test_marker_causes():
+    evs = [
+        _ev(0, w1=50_000),
+        _ev(10, w1=50_000, read=1_000, markers={"system:compact_boundary"}),
+        _ev(20, w1=51_000, read=1_000, markers={"attachment:mcp_instructions_delta"}),
+        _ev(30, w1=52_000, read=1_000, markers={"attachment:date_change"}),
+        _ev(40, w1=53_000, read=1_000, markers={"attachment:hook_additional_context"}),
+        _ev(4000, w1=53_000, read=1_000, markers={"attachment:compact_file_reference"}),
+    ]
+    got = [c.cause for c in sorted(rewrites.classify(evs), key=lambda c: c.event.ts)]
+    assert got == ["stream start", "after compaction", "tool/agent list changed", "date change",
+                   "other prefix change", "after compaction"]

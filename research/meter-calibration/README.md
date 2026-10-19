@@ -45,11 +45,17 @@ Anthropic publishes no formula. Its help center only says cached content
    to the real usage % and re-estimates it, so every real-world flaw in the
    data stays in place; a free fit with an independent weight per token type and family.
 5. **Rewrites.** A call is a cold-cache rewrite when it writes at least 10k
-   tokens and reads less than half its context. Cause, in order: first call of
-   a transcript stream (session or subagent start), gap beyond the cache TTL
-   (1h if the last writing call used 1h writes, else 5m), model switch,
-   context dropped below 60% of the previous call (compaction or clear),
-   otherwise an unexplained prefix change.
+   tokens and reads less than half its context. Each call carries the
+   attachment and system markers Claude Code logged since the previous call in
+   its stream. Cause, in order: first call of a stream (session or subagent
+   start); compaction (a `compact_boundary`, `compact_file_reference` or
+   `invoked_skills` marker, or context below 60% of the previous call); gap
+   beyond the cache TTL (1h if the last writing call used 1h writes, else 5m);
+   model switch; tool or agent list change (`agent_listing_delta`,
+   `deferred_tools_delta`, `mcp_instructions_delta`, `skill_listing`); date
+   change; otherwise unexplained. For the unexplained rest the CLI lists which
+   markers preceded it. Markers show what happened before a miss, not proof it
+   caused it.
 
 ## Limits
 

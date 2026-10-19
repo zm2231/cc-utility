@@ -29,6 +29,7 @@ class Event:
     write_1h: int
     read: int
     output: int
+    markers: frozenset[str] = frozenset()
 
     @property
     def family(self) -> str | None:
@@ -94,25 +95,46 @@ def _stream_of(path: Path) -> tuple[str, str]:
     return path.stem, "main"
 
 
+def _marker(d: dict) -> str | None:
+    if d.get("type") == "attachment" and isinstance(d.get("attachment"), dict):
+        return f"attachment:{d['attachment'].get('type')}"
+    if d.get("type") == "system" and d.get("subtype"):
+        return f"system:{d['subtype']}"
+    return None
+
+
 def load_events(projects_dir: Path) -> list[Event]:
-    """Transcripts repeat a message once per content block; the copy with the largest output count is the final one."""
+    """Transcripts repeat a message once per content block; the copy with the largest output count is the final one.
+    Each call carries the attachment and system markers logged since the previous call in its stream."""
     best: dict[str, Event] = {}
     for path in projects_dir.rglob("*.jsonl"):
         session_id, stream = _stream_of(path)
+        pending: set[str] = set()
+        marked: dict[str, frozenset[str]] = {}
         with path.open(errors="ignore") as fh:
             for line in fh:
-                if '"usage"' not in line:
+                if '"usage"' not in line and '"attachment"' not in line and '"system"' not in line:
                     continue
                 try:
                     d = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                msg = d.get("message") if isinstance(d, dict) else None
-                if not isinstance(msg, dict) or not msg.get("usage") or not msg.get("id") or "timestamp" not in d:
+                if not isinstance(d, dict):
+                    continue
+                msg = d.get("message")
+                if not isinstance(msg, dict) or not msg.get("usage"):
+                    m = _marker(d)
+                    if m:
+                        pending.add(m)
+                    continue
+                if not msg.get("id") or "timestamp" not in d:
                     continue
                 model = msg.get("model", "")
                 if not model.startswith("claude"):
                     continue
+                if msg["id"] not in marked:
+                    marked[msg["id"]] = frozenset(pending)
+                    pending.clear()
                 u = msg["usage"]
                 split = u.get("cache_creation") or {}
                 w1h = split.get("ephemeral_1h_input_tokens") or 0
@@ -123,6 +145,7 @@ def load_events(projects_dir: Path) -> list[Event]:
                     parse_ts(d["timestamp"]), session_id, stream, model,
                     u.get("input_tokens") or 0, w5m, w1h,
                     u.get("cache_read_input_tokens") or 0, u.get("output_tokens") or 0,
+                    marked[msg["id"]],
                 )
                 prev = best.get(msg["id"])
                 if prev is None or ev.output > prev.output:

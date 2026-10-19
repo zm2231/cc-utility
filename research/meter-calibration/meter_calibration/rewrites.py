@@ -4,7 +4,15 @@ from dataclasses import dataclass
 from .fit import API_WEIGHTS
 from .load import Event
 
-CAUSES = ("stream start", "idle expiry", "model switch", "after compaction", "other prefix change")
+CAUSES = (
+    "stream start", "after compaction", "idle expiry", "model switch", "tool/agent list changed", "date change",
+    "other prefix change",
+)
+COMPACTION_MARKERS = frozenset({"system:compact_boundary", "attachment:compact_file_reference", "attachment:invoked_skills"})
+TOOL_LIST_MARKERS = frozenset({
+    "attachment:agent_listing_delta", "attachment:deferred_tools_delta", "attachment:mcp_instructions_delta",
+    "attachment:skill_listing",
+})
 CONTEXT_BUCKETS = (100_000, 200_000, 300_000, float("inf"))
 
 
@@ -39,12 +47,16 @@ def classify(events: list[Event]) -> list[Classified]:
             if is_rewrite(e):
                 if prev is None:
                     cause = "stream start"
+                elif e.markers & COMPACTION_MARKERS or e.context < 0.6 * prev.context:
+                    cause = "after compaction"
                 elif gap > _ttl(last_writer):
                     cause = "idle expiry"
                 elif prev.model != e.model:
                     cause = "model switch"
-                elif e.context < 0.6 * prev.context:
-                    cause = "after compaction"
+                elif e.markers & TOOL_LIST_MARKERS:
+                    cause = "tool/agent list changed"
+                elif "attachment:date_change" in e.markers:
+                    cause = "date change"
                 else:
                     cause = "other prefix change"
             out.append(Classified(e, cause, gap))
@@ -79,10 +91,12 @@ class RewriteReport:
     by_context: dict[str, float]
     by_family: dict[str, float]
     idle_gaps: list[float]
+    other_markers: dict[str, float]
 
 
 def summarize(classified: list[Classified], scales: dict[str, float]) -> RewriteReport:
-    r = RewriteReport(0.0, 0.0, defaultdict(float), defaultdict(int), defaultdict(float), defaultdict(float), [])
+    r = RewriteReport(0.0, 0.0, defaultdict(float), defaultdict(int), defaultdict(float), defaultdict(float), [],
+                      defaultdict(float))
     for c in classified:
         m = meter_units(c.event, scales)
         r.total += m["write"] + m["other"]
@@ -95,4 +109,7 @@ def summarize(classified: list[Classified], scales: dict[str, float]) -> Rewrite
         r.by_family[c.event.family or "?"] += m["write"]
         if c.cause == "idle expiry":
             r.idle_gaps.append(c.gap)
+        if c.cause == "other prefix change":
+            for marker in c.event.markers or {"(none)"}:
+                r.other_markers[marker] += m["write"]
     return r

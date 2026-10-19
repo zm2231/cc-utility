@@ -84,6 +84,10 @@ def rewrite_report(events: list, accounts: dict, windows: list) -> None:
     print("\nRewrites by model family:")
     for f, v in sorted(rep.by_family.items(), key=lambda kv: -kv[1]):
         print(f"  {f:7s} {v / rep.total:6.1%}")
+    if rep.other_markers:
+        print("\nMarkers logged before the remaining 'other prefix change' rewrites (share of usage, overlapping):")
+        for m, v in sorted(rep.other_markers.items(), key=lambda kv: -kv[1])[:8]:
+            print(f"  {m:40s} {v / rep.total:6.1%}")
     if rep.idle_gaps:
         g = np.array(rep.idle_gaps) / 60
         print(f"\nIdle-expiry gaps (minutes): median {np.median(g):.0f}, "
