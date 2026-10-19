@@ -169,3 +169,35 @@ def test_free_fit_gives_fresh_input_its_own_weight():
         windows.append(w)
     c = fit.free_fit(windows, ["opus"])["opus"]
     assert np.allclose(list(c.values()), [7.0, 1.0, 3.0, 0.02, 10.0], rtol=1e-3)
+
+
+def _run_cli(*argv, monkeypatch, capsys):
+    import pytest
+
+    from meter_calibration import cli
+    monkeypatch.setattr("sys.argv", ["meter-calibration", *argv])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    return exc.value.code, capsys.readouterr().err
+
+
+def test_cli_rejects_reversed_period(tmp_path, monkeypatch, capsys):
+    code, err = _run_cli("all", "--since", "2026-10-19", "--until", "2026-07-01", "--sidecar", str(tmp_path / "x"),
+                         "--projects", str(tmp_path), monkeypatch=monkeypatch, capsys=capsys)
+    assert code == 2 and "--since must be before --until" in err
+
+
+def test_cli_rejects_period_without_data(tmp_path, monkeypatch, capsys):
+    (tmp_path / "log.jsonl").write_text("")
+    code, err = _run_cli("all", "--since", "2026-07-01", "--until", "2026-07-02", "--sidecar", str(tmp_path / "log.jsonl"),
+                         "--projects", str(tmp_path), monkeypatch=monkeypatch, capsys=capsys)
+    assert code == 2 and "no status-line renders" in err
+
+
+def test_cli_rejects_too_few_windows(tmp_path, monkeypatch, capsys):
+    rows = [{"ts": "2026-07-01T01:00:00Z", "session_id": "p", "five_hour_pct": 10, "five_hour_reset": 3600,
+             "seven_day_pct": 1, "seven_day_reset": 86400}] * 6
+    (tmp_path / "log.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+    code, err = _run_cli("all", "--since", "2026-07-01", "--until", "2026-07-02", "--sidecar", str(tmp_path / "log.jsonl"),
+                         "--projects", str(tmp_path), monkeypatch=monkeypatch, capsys=capsys)
+    assert code == 2 and "only 1 usable 5h windows" in err

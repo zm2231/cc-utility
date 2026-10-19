@@ -8,6 +8,8 @@ from . import fit, rewrites
 from .load import Event, Render, load_events, load_renders, tag_accounts
 from .windows import FIVE_HOURS, five_hour_windows
 
+MIN_WINDOWS = 30
+
 
 def _utc_date(s: str) -> float:
     return datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=UTC).timestamp()
@@ -39,7 +41,7 @@ def calibrate(windows: list, loose_windows: list, args: argparse.Namespace) -> N
     print("  per-family scale (%/M API-equivalent tokens): " + ", ".join(f"{f}={s:.3f}" for f, s in scales.items()))
     for fam in ("opus", "fable"):
         dom = fit.dominated_by(windows, fam)
-        if len(dom) >= 30:
+        if len(dom) >= MIN_WINDOWS:
             print(f"  {fam}-dominated windows (>=80% of usage): n={len(dom)}  best rho {fit.best_rho(dom)}"
                   f"  partial corr(resid, reads)={fit.partial_corr_reads(dom, fam):+.3f}")
         else:
@@ -103,14 +105,20 @@ def main() -> None:
     p.add_argument("--until", type=_utc_date, required=True, help="UTC date, exclusive (YYYY-MM-DD)")
     p.add_argument("--boot", type=int, default=200)
     args = p.parse_args()
+    if args.since >= args.until:
+        p.error("--since must be before --until")
 
     renders, events = select_period(load_renders(args.sidecar), load_events(args.projects), args.since, args.until)
+    if not renders:
+        p.error(f"no status-line renders in {args.sidecar} for this period")
     primary, accounts = tag_accounts(renders)
     print(f"period {_day(args.since)} to {_day(args.until)} (exclusive)")
     print(f"renders {len(renders)}, sessions primary/other "
           f"{sum(v == 'primary' for v in accounts.values())}/{sum(v == 'other' for v in accounts.values())}, "
           f"claude API calls {len(events)}")
     windows = five_hour_windows(renders, events, primary, accounts)
+    if len(windows) < MIN_WINDOWS:
+        p.error(f"only {len(windows)} usable 5h windows in this period; need at least {MIN_WINDOWS}")
     if args.command in ("calibrate", "all"):
         calibrate(windows, five_hour_windows(renders, events, primary, accounts, include_unknown=True), args)
     if args.command in ("rewrites", "all"):
