@@ -17,13 +17,14 @@ def _pct(a: np.ndarray) -> str:
     return f"{a[1]:.0%} (90% range {a[0]:.0%}-{a[2]:.0%})"
 
 
-def calibrate(windows: list, args: argparse.Namespace) -> None:
+def calibrate(windows: list, loose_windows: list, args: argparse.Namespace) -> None:
     print(f"\n5h windows used: {len(windows)} ({_day(windows[0].end)} to {_day(windows[-1].end)})")
     print("\nCache-read weight (x fresh input), per-family meter scales, API ratios for writes/output:")
     for rho in (0, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1.0):
         print(f"  rho={rho:<5} R2={fit.fit_scales(windows, rho).r2:.3f}")
     best = fit.best_rho(windows)
-    print(f"  best rho {best}  bootstrap 5/50/95%: {np.round(fit.bootstrap_rho(windows, args.boot), 4)}")
+    print(f"  best rho {best}  week-block bootstrap 5/50/95%: {np.round(fit.bootstrap_rho(windows, args.boot), 4)}")
+    print(f"  sensitivity, counting unrendered sessions as primary: best rho {fit.best_rho(loose_windows)}")
 
     half = len(windows) // 2
     for label, part in (("first half", windows[:half]), ("second half", windows[half:])):
@@ -42,18 +43,25 @@ def calibrate(windows: list, args: argparse.Namespace) -> None:
     for fam in ("opus", "fable"):
         print(f"  partial corr(resid usage, {fam} reads | all writes+output) = {fit.partial_corr_reads(windows, fam):+.3f}")
 
-    print("\nPower check (synthetic usage from your real token mix, observed noise level):")
-    for true_rho in (0.025, 0.05, 0.1):
-        print(f"  true rho {true_rho}: recovered 5/50/95% {np.round(fit.power_check(windows, true_rho), 4)}")
+    print("\nInjection check (known read charge added to the real usage %, then re-estimated):")
+    for rho in (0.025, 0.05, 0.1):
+        print(f"  injected {rho}: recovered {fit.injection_check(windows, rho):.4f}")
 
-    print("\nShare of 5h meter usage (free per-family weights, bootstrap):")
+    print("\nFree fit, no API ratios (%/Mtok; API: 1h/5m 1.6, read/5m 0.08, output/5m 4.0). Write, read and output move\n"
+          "together, so wildly off ratios here mean the data cannot separate them, not that the meter uses them:")
+    for fam, c in fit.free_fit(windows, [f for f in ("opus", "fable") if f in scales]).items():
+        base = c["write_5m"] or float("nan")
+        print(f"  {fam:6s} " + "  ".join(f"{k}={v:.4f}" for k, v in c.items())
+              + f"  | 1h/5m={c['write_1h'] / base:.2f} read/5m={c['read'] / base:.3f} output/5m={c['output'] / base:.2f}")
+
+    print("\nShare of 5h meter usage (API-ratio model, rho and scales re-fit per week-block resample):")
     for k, v in fit.usage_shares(windows, args.boot).items():
         print(f"  {k:7s} {_pct(v)}")
 
 
 def rewrite_report(events: list, accounts: dict, windows: list) -> None:
     start = windows[0].end - 5 * 3600
-    evs = [e for e in events if e.ts >= start and accounts.get(e.session_id) != "other"]
+    evs = [e for e in events if e.ts >= start and accounts.get(e.session_id) == "primary"]
     scales = fit.fit_scales(windows, 0.0).scales
     rep = rewrites.summarize(rewrites.classify(evs), scales)
     rewrite_total = sum(rep.by_cause.values())
@@ -81,7 +89,6 @@ def main() -> None:
     p.add_argument("command", choices=("calibrate", "rewrites", "all"))
     p.add_argument("--sidecar", type=Path, default=Path.home() / ".cc-utility" / "sidecar-log.jsonl")
     p.add_argument("--projects", type=Path, default=Path.home() / ".claude" / "projects")
-    p.add_argument("--strict", action="store_true", help="drop sessions with no status-line renders instead of assuming the primary account")
     p.add_argument("--boot", type=int, default=200)
     args = p.parse_args()
 
@@ -91,9 +98,9 @@ def main() -> None:
     print(f"renders {len(renders)}, sessions primary/other "
           f"{sum(v == 'primary' for v in accounts.values())}/{sum(v == 'other' for v in accounts.values())}, "
           f"claude API calls {len(events)}")
-    windows = five_hour_windows(renders, events, primary, accounts, include_unknown=not args.strict)
+    windows = five_hour_windows(renders, events, primary, accounts)
     if args.command in ("calibrate", "all"):
-        calibrate(windows, args)
+        calibrate(windows, five_hour_windows(renders, events, primary, accounts, include_unknown=True), args)
     if args.command in ("rewrites", "all"):
         rewrite_report(events, accounts, windows)
 

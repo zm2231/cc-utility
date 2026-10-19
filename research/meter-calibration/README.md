@@ -19,29 +19,31 @@ Anthropic publishes no formula. Its help center only says cached content
 
 ```bash
 uv run meter-calibration all          # calibrate + rewrite breakdown
-uv run meter-calibration calibrate --strict   # drop sessions with no status-line renders
 uv run pytest
 ```
 
 ## Method
 
 1. **Windows.** A 5h window is keyed by its absolute reset time. Its usage is
-   the highest % any render reported for it. Windows at 100% are censored and
-   dropped.
+   the highest % a primary-account render reported for it, and only events up
+   to the last render showing that % are counted, since later calls cannot be
+   reflected in it. Windows at 100% are censored and dropped.
 2. **Accounts.** The sidecar has no account field. Each account has a fixed
    weekly reset hour, so sessions are tagged by the reset hour they rendered
-   and only the most common one (primary) is used. Renders whose reset had
-   already passed are stale and dropped.
+   and only the most common one (primary) is used. Sessions that never
+   rendered a status line (headless `-p` runs) have no proven account and are
+   excluded; the CLI prints the result with them included as a sensitivity
+   line. Renders whose reset had already passed are stale and dropped.
 3. **Fit.** `pct ~ sum over families of k_f * (fresh + 1.25*w5m + 2*w1h + rho*read + 5*out)`,
    nonnegative least squares, scanning `rho`. Each family has its own scale
    `k_f`, so Fable's higher per-token cost does not leak into the read weight.
-   A free fit with independent write/read/output weights per family checks
-   the API ratios.
+   Confidence intervals resample whole weeks, since windows in a week share
+   workload and unlogged usage.
 4. **Disproof checks.** Partial correlation of leftover usage with reads after
-   all write and output columns; separate fits on Opus-dominated and
-   Fable-dominated windows; a power check that synthesizes usage from the real
-   token mix with a known `rho` and the observed noise, then tries to recover
-   it.
+   each write type and output per family; separate fits on Opus-dominated and
+   Fable-dominated windows; an injection check that adds a known read charge
+   to the real usage % and re-estimates it, so every real-world flaw in the
+   data stays in place; a free fit with independent weights per token type.
 5. **Rewrites.** A call is a cold-cache rewrite when it writes at least 10k
    tokens and reads less than half its context. Cause, in order: first call of
    a transcript stream (session or subagent start), gap beyond the cache TTL

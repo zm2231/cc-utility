@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import nnls
 
-from .load import FAMILIES
+from .load import FAMILIES, WEEK
 from .windows import COLUMNS, Window
 
 API_WEIGHTS = {"fresh": 1.0, "write_5m": 1.25, "write_1h": 2.0, "output": 5.0}
@@ -58,30 +58,52 @@ def best_rho(windows: list[Window], y: np.ndarray | None = None, grid: np.ndarra
     return float(grid[int(np.argmax(r2s))])
 
 
+def week_blocks(windows: list[Window]) -> list[list[int]]:
+    blocks: dict[int, list[int]] = {}
+    for i, w in enumerate(windows):
+        blocks.setdefault(int(w.end // WEEK), []).append(i)
+    return list(blocks.values())
+
+
 def bootstrap_rho(windows: list[Window], n: int = 200, seed: int = 0) -> np.ndarray:
+    """Resamples whole weeks, since windows in the same week share workload and unlogged usage."""
     rng = np.random.default_rng(seed)
     y = pcts(windows)
+    blocks = week_blocks(windows)
     out = []
     for _ in range(n):
-        idx = rng.choice(len(windows), len(windows))
+        idx = [i for b in rng.integers(len(blocks), size=len(blocks)) for i in blocks[b]]
         out.append(best_rho([windows[i] for i in idx], y[idx]))
     return np.percentile(out, [5, 50, 95])
 
 
-def free_fit(windows: list[Window], families: list[str]) -> dict[str, dict[str, float]]:
-    """No API ratios assumed: each family gets independent write, read and output weights in %/Mtok."""
-    X = np.array([
-        [v for f in families for v in (_write_equiv(w.tokens[f]), w.tokens[f][I["read"]], w.tokens[f][I["output"]])]
-        for w in windows
-    ]) / 1e6
-    k, _ = nnls(X, pcts(windows))
-    return {f: dict(zip(("write", "read", "output"), k[3 * j:3 * j + 3], strict=True)) for j, f in enumerate(families)}
+FREE_COLUMNS = ("write_5m", "write_1h", "read", "output")
+
+
+def _free_row(w: Window, families: list[str]) -> list[float]:
+    row = []
+    for f in families:
+        t = w.tokens[f]
+        row += [t[I["fresh"]] + t[I["write_5m"]], t[I["write_1h"]], t[I["read"]], t[I["output"]]]
+    return row
+
+
+def free_fit(windows: list[Window], families: list[str], y: np.ndarray | None = None) -> dict[str, dict[str, float]]:
+    """No API ratios assumed: each family gets independent 5m-write (with fresh input), 1h-write, read and output
+    weights in %/Mtok."""
+    X = np.array([_free_row(w, families) for w in windows]) / 1e6
+    k, _ = nnls(X, pcts(windows) if y is None else y)
+    n = len(FREE_COLUMNS)
+    return {f: dict(zip(FREE_COLUMNS, k[n * j:n * j + n], strict=True)) for j, f in enumerate(families)}
 
 
 def partial_corr_reads(windows: list[Window], family: str) -> float:
-    """Correlation between leftover usage and a family's cache reads once every write and output column is accounted for."""
+    """Correlation between leftover usage and a family's cache reads once each write type and output is accounted for
+    separately per family."""
     fams = active_families(windows)
-    X = np.array([[c for f in fams for c in (_write_equiv(w.tokens[f]), w.tokens[f][I["output"]])] for w in windows]) / 1e6
+    keep = [m for m, c in enumerate(FREE_COLUMNS) if c != "read"]
+    X = np.array([[row[j * len(FREE_COLUMNS) + m] for j in range(len(fams)) for m in keep]
+                  for row in (_free_row(w, fams) for w in windows)]) / 1e6
     y = pcts(windows)
     k, _ = nnls(X, y)
     resid = y - X @ k
@@ -105,37 +127,37 @@ def dominated_by(windows: list[Window], family: str, threshold: float = 0.8) -> 
     return [w for w, s in zip(windows, share, strict=True) if s >= threshold]
 
 
-def power_check(windows: list[Window], true_rho: float, seed: int = 0, trials: int = 50) -> np.ndarray:
-    """Synthetic usage from the real token mix with a known read weight and the observed noise level; returns recovered rho percentiles."""
-    truth = fit_scales(windows, true_rho)
-    fams = list(truth.scales)
-    pred = design(windows, true_rho, fams) @ np.array([truth.scales[f] for f in fams])
-    observed = fit_scales(windows, best_rho(windows))
-    obs_pred = design(windows, observed.rho, fams) @ np.array([observed.scales[f] for f in fams])
+def read_term(windows: list[Window], scales: dict[str, float]) -> np.ndarray:
+    return np.array([sum(scales[f] * w.tokens[f][I["read"]] for f in scales) for w in windows]) / 1e6
+
+
+def injection_check(windows: list[Window], injected_rho: float) -> float:
+    """Adds a known read charge to the real usage % and re-estimates, so every real-world misspecification in the data
+    (unlogged usage, account leakage, timing) stays in place; a biased estimator under-recovers the injection."""
+    base = fit_scales(windows, best_rho(windows))
+    y = pcts(windows) + injected_rho * read_term(windows, base.scales)
+    return best_rho(windows, y) - base.rho
+
+
+def usage_shares(windows: list[Window], n: int = 200, seed: int = 2) -> dict[str, np.ndarray]:
+    """Week-block bootstrap of meter usage shares under the API-ratio model, re-estimating rho and the family scales on
+    each resample so the read share carries the read weight's uncertainty."""
+    fams = active_families(windows)
     y = pcts(windows)
-    sigma = float(np.std(np.log((y + 1) / (obs_pred + 1))))
-    rng = np.random.default_rng(seed)
-    recovered = [best_rho(windows, pred * np.exp(rng.normal(0, sigma, len(pred)))) for _ in range(trials)]
-    return np.percentile(recovered, [5, 50, 95])
-
-
-def usage_shares(windows: list[Window], n: int = 300, seed: int = 2) -> dict[str, np.ndarray]:
-    """Bootstrap shares of meter usage under the free fit, restricted to opus and fable which carry nearly all tokens."""
-    fams = [f for f in ("opus", "fable") if f in active_families(windows)]
+    blocks = week_blocks(windows)
+    tot = {f: sum((w.tokens[f] for w in windows), np.zeros(len(COLUMNS))) / 1e6 for f in fams}
     rng = np.random.default_rng(seed)
     rows: dict[str, list[float]] = {k: [] for k in ("write", "read", "output", *fams)}
     for _ in range(n):
-        sample = [windows[i] for i in rng.choice(len(windows), len(windows))]
-        coef = free_fit(sample, fams)
-        contrib = {
-            (f, kind): coef[f][kind] * sum(
-                (_write_equiv(w.tokens[f]) if kind == "write" else w.tokens[f][I[kind]]) for w in windows
-            ) / 1e6
-            for f in fams for kind in ("write", "read", "output")
-        }
-        total = sum(contrib.values()) or 1.0
+        idx = [i for b in rng.integers(len(blocks), size=len(blocks)) for i in blocks[b]]
+        sample = [windows[i] for i in idx]
+        rho = best_rho(sample, y[idx])
+        k = fit_scales(sample, rho, y[idx]).scales
+        parts = {f: {"write": k[f] * _write_equiv(tot[f]), "read": k[f] * rho * tot[f][I["read"]],
+                     "output": k[f] * API_WEIGHTS["output"] * tot[f][I["output"]]} for f in fams}
+        total = sum(v for p in parts.values() for v in p.values()) or 1.0
         for kind in ("write", "read", "output"):
-            rows[kind].append(sum(contrib[(f, kind)] for f in fams) / total)
+            rows[kind].append(sum(p[kind] for p in parts.values()) / total)
         for f in fams:
-            rows[f].append(sum(contrib[(f, kind)] for kind in ("write", "read", "output")) / total)
+            rows[f].append(sum(parts[f].values()) / total)
     return {k: np.percentile(v, [5, 50, 95]) for k, v in rows.items()}

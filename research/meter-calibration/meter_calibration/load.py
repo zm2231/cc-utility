@@ -62,15 +62,15 @@ def load_renders(path: Path) -> list[Render]:
                 continue
             if not isinstance(d, dict):
                 continue
-            vals = [d.get(k) for k in ("five_hour_pct", "five_hour_reset", "seven_day_pct", "seven_day_reset")]
-            if None in vals or "ts" not in d:
+            p5, r5, p7, r7 = (d.get(k) for k in ("five_hour_pct", "five_hour_reset", "seven_day_pct", "seven_day_reset"))
+            if p5 is None or r5 is None or p7 is None or r7 is None or "ts" not in d:
                 continue
             ts = parse_ts(d["ts"])
-            a5 = absolute_reset(ts, float(vals[1]))
-            a7 = absolute_reset(ts, float(vals[3]))
+            a5 = absolute_reset(ts, float(r5))
+            a7 = absolute_reset(ts, float(r7))
             if a5 <= ts + 30 or a7 <= ts + 30:
                 continue
-            out.append(Render(ts, d.get("session_id", ""), float(vals[0]), a5, float(vals[2]), a7))
+            out.append(Render(ts, d.get("session_id", ""), float(p5), a5, float(p7), a7))
     return out
 
 

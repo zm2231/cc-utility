@@ -4,8 +4,15 @@ from pathlib import Path
 import numpy as np
 
 from meter_calibration import fit, rewrites
-from meter_calibration.load import Event, load_events, load_renders, tag_accounts
-from meter_calibration.windows import Window
+from meter_calibration.load import (
+    Event,
+    Render,
+    load_events,
+    load_renders,
+    tag_accounts,
+    weekly_phase,
+)
+from meter_calibration.windows import Window, five_hour_windows
 
 
 def _ev(ts, model="claude-opus-5-5", fresh=0, w5=0, w1=0, read=0, out=0, sid="s", stream="main"):
@@ -94,3 +101,49 @@ def test_five_minute_ttl_applies_without_1h_writes():
 
 def test_context_buckets():
     assert [rewrites.context_bucket(c) for c in (5, 150_000, 250_000, 900_000)] == ["0-100k", "100-200k", "200-300k", "300k+"]
+
+
+def _render(ts, sid, pct, reset_end, week_reset=1_000_000.0):
+    return Render(ts, sid, pct, reset_end, 1.0, week_reset)
+
+
+def test_window_excludes_events_after_the_render_that_supplied_pct():
+    end = 20_000.0
+    renders = [_render(end - 3000 + i, "p", 10.0 if i < 4 else 30.0, end) for i in range(6)]
+    events = [_ev(end - 3500, out=1000, sid="p"), _ev(end - 100, read=9_000_000, sid="p"), _ev(end - 5 * 3600 - 60, out=50, sid="p")]
+    (w,) = five_hour_windows(renders, events, weekly_phase(1_000_000.0), {"p": "primary"})
+    assert (w.end, w.pct, w.observed_at) == (end, 30.0, end - 2995)
+    assert w.total("read") == 0 and w.total("output") == 1000
+
+
+def test_unrendered_sessions_excluded_unless_requested():
+    end = 20_000.0
+    renders = [_render(end - 3000 + i, "p", 10.0, end) for i in range(6)]
+    events = [_ev(end - 2999, out=500, sid="p"), _ev(end - 2999, out=7000, sid="headless")]
+    phase = weekly_phase(1_000_000.0)
+    (strict,) = five_hour_windows(renders, events, phase, {"p": "primary"})
+    (loose,) = five_hour_windows(renders, events, phase, {"p": "primary"}, include_unknown=True)
+    assert (strict.total("output"), loose.total("output")) == (500, 7500)
+
+
+def test_injection_check_recovers_known_read_charge():
+    windows = _synthetic_windows(0.0)
+    assert abs(fit.injection_check(windows, 0.05) - 0.05) <= 0.015
+
+
+def test_free_fit_estimates_ratios_without_assuming_them():
+    rng = np.random.default_rng(3)
+    windows = []
+    for i in range(200):
+        w = Window(end=float(i), pct=0.0, renders=10)
+        w.tokens["opus"][:] = (0, *rng.uniform(1e5, 1e6, 2), rng.uniform(1e7, 1e8), rng.uniform(1e4, 3e5))
+        t = w.tokens["opus"] / 1e6
+        w.pct = 1.0 * t[1] + 3.0 * t[2] + 0.02 * t[3] + 10.0 * t[4]
+        windows.append(w)
+    c = fit.free_fit(windows, ["opus"])["opus"]
+    assert np.allclose([c["write_5m"], c["write_1h"], c["read"], c["output"]], [1.0, 3.0, 0.02, 10.0], rtol=1e-3)
+
+
+def test_bootstrap_resamples_whole_weeks():
+    windows = [Window(end=float(d * 86400), pct=1.0, renders=10) for d in range(21)]
+    assert sorted(len(b) for b in fit.week_blocks(windows)) == [7, 7, 7]

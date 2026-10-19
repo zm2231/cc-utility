@@ -14,6 +14,7 @@ class Window:
     end: float
     pct: float
     renders: int
+    observed_at: float = 0.0
     tokens: dict[str, np.ndarray] = field(default_factory=lambda: {f: np.zeros(len(COLUMNS)) for f in FAMILIES})
 
     def total(self, column: str) -> float:
@@ -26,17 +27,19 @@ def five_hour_windows(
     events: list[Event],
     primary_phase: int,
     accounts: dict[str, str],
-    include_unknown: bool = True,
+    include_unknown: bool = False,
     min_renders: int = 5,
 ) -> list[Window]:
-    """A window's usage is the highest 5h % any primary-account render reported for that reset time."""
+    """A window's usage is the highest 5h % a primary-account render reported for that reset, and only events up to the
+    last render showing that % can be reflected in it."""
     by_reset: dict[int, Window] = {}
     for r in renders:
         if weekly_phase(r.seven_day_reset) != primary_phase or accounts.get(r.session_id) != "primary":
             continue
         key = round(r.five_hour_reset / 600) * 600
-        w = by_reset.setdefault(key, Window(end=key, pct=0.0, renders=0))
-        w.pct = max(w.pct, r.five_hour_pct)
+        w = by_reset.setdefault(key, Window(end=r.five_hour_reset, pct=0.0, renders=0))
+        if r.five_hour_pct > w.pct or (r.five_hour_pct == w.pct and r.ts > w.observed_at):
+            w.pct, w.observed_at = r.five_hour_pct, r.ts
         w.renders += 1
 
     times = [e.ts for e in events]
@@ -44,7 +47,7 @@ def five_hour_windows(
     for w in sorted(by_reset.values(), key=lambda w: w.end):
         if w.renders < min_renders or not 2 <= w.pct < 100:
             continue
-        lo, hi = bisect.bisect_left(times, w.end - FIVE_HOURS), bisect.bisect_left(times, w.end)
+        lo, hi = bisect.bisect_left(times, w.end - FIVE_HOURS), bisect.bisect_right(times, w.observed_at)
         for e in events[lo:hi]:
             acct = accounts.get(e.session_id)
             if acct == "other" or (acct is None and not include_unknown) or e.family is None:
