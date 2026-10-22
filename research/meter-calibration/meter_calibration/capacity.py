@@ -66,4 +66,7 @@ def weekly_per_five_hour(
         idx = [j for b in rng.integers(len(blocks), size=len(blocks)) for j in blocks[b]]
         boot.append((xs[idx] * ys[idx]).sum() / (xs[idx] * xs[idx]).sum())
     lo, hi = np.percentile(boot, [5, 95])
+    if not all(np.isfinite(v) and v > 0 for v in (ratio, lo, hi)):
+        raise ValueError(f"the weekly meter barely moved across {len(used)} paired 5h windows "
+                         f"(weekly % per 5h %: {ratio:.3f}, 90% {lo:.3f}-{hi:.3f}); cannot convert to a weekly capacity")
     return WeeklyRatio(ratio, float(lo), float(hi), len(used))

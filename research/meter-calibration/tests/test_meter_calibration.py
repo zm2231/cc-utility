@@ -472,3 +472,20 @@ def test_cli_rejects_constant_usage(tmp_path, monkeypatch, capsys):
                          str(tmp_path / "log.jsonl"), "--projects", str(tmp_path / "projects"),
                          monkeypatch=monkeypatch, capsys=capsys)
     assert code == 2 and "no variation to fit" in err
+
+
+def test_weekly_ratio_rejects_a_weekly_meter_that_never_moves():
+    import pytest
+
+    from meter_calibration.capacity import weekly_per_five_hour
+    week_end = 30 * 86400.0
+    renders, windows = [], []
+    for i in range(30):
+        start = i * 6 * 3600.0 + 3600
+        end = start + 5 * 3600
+        pct = float(10 + (i % 5) * 10)
+        renders.append(Render(start - 60, "p", 0.0, start, 4.0, week_end))
+        renders.append(Render(end - 600, "p", pct, end, 4.0, week_end))
+        windows.append(Window(end=end, pct=pct, renders=10, observed_at=end - 600))
+    with pytest.raises(ValueError, match="weekly meter barely moved across 30 paired"):
+        weekly_per_five_hour(renders, windows, weekly_phase(week_end), {"p": "primary"}, n=50)
