@@ -7,7 +7,7 @@ the account spent in the same window, then converts the weights into how many
 tokens fill a 5h window and a week.
 
 Anthropic publishes no formula. Its help center only says cached content
-"counts less against your limits". This measures it for one account.
+"counts less against your limits". This measures it for one account at a time.
 
 ## Inputs
 
@@ -26,13 +26,18 @@ Anthropic publishes no formula. Its help center only says cached content
   ```
 
 ## Run
-  
-  ```bash
-  uv run meter-calibration all --since YYYY-MM-DD --until YYYY-MM-DD
-  uv run pytest
-  ```
-  
-  ## Method
+
+```bash
+uv run meter-calibration all --since YYYY-MM-DD --until YYYY-MM-DD \
+  --projects ~/.claude/projects [--projects OTHER_CONFIG_DIR/projects ...] \
+  [--proxy-usage usage.jsonl ... --primary-email ACCOUNT_EMAIL]
+uv run pytest
+```
+
+Commands: `calibrate` (token weights and checks), `capacity` (tokens per 5h
+window and per week), `rewrites` (where cache writes come from), `all`.
+
+## Method
 
 1. **Windows.** A 5h window is keyed by its absolute reset time. Its usage is
    the highest % a primary-account render reported for it, and only events up
