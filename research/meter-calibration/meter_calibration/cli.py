@@ -4,8 +4,15 @@ from pathlib import Path
 
 import numpy as np
 
-from . import fit, rewrites
-from .load import Event, Render, load_events, load_renders, tag_accounts
+from . import capacity, fit, rewrites
+from .load import (
+    Event,
+    Render,
+    load_events,
+    load_proxy_events,
+    load_renders,
+    tag_accounts,
+)
 from .windows import COLUMNS, FIVE_HOURS, five_hour_windows
 
 MIN_WINDOWS = 30
@@ -65,6 +72,21 @@ def calibrate(windows: list, loose_windows: list, args: argparse.Namespace) -> N
         print(f"  {k:7s} {_pct(v)}")
 
 
+def capacity_report(renders: list, windows: list, primary: int, accounts: dict) -> None:
+    rho = fit.best_rho(windows)
+    caps = capacity.five_hour_capacity(fit.fit_scales(windows, rho).scales)
+    wk = capacity.weekly_per_five_hour(renders, windows, primary, accounts)
+    per_week, per_week_lo, per_week_hi = wk.windows_per_week
+    print(f"\nCapacity of the primary account (rho={rho}; millions of tokens of one type alone):")
+    print(f"  {'family':7s} {'fresh':>8s} {'write 5m':>9s} {'write 1h':>9s} {'output':>8s}   per 5h window")
+    for fam, c in caps.items():
+        print(f"  {fam:7s} {c['fresh']:8.1f} {c['write_5m']:9.1f} {c['write_1h']:9.1f} {c['output']:8.2f}")
+    print(f"  weekly % per 5h %: {wk.ratio:.3f} (90% {wk.low:.3f}-{wk.high:.3f}, {wk.windows} windows)"
+          f" -> one week = {per_week:.1f} full 5h windows (90% {per_week_lo:.1f}-{per_week_hi:.1f})")
+    for fam, c in caps.items():
+        print(f"  {fam:7s} per week: {c['fresh'] * per_week:7.0f}M fresh-input-equivalent, {c['output'] * per_week:6.1f}M output alone")
+
+
 def rewrite_report(events: list, accounts: dict, windows: list) -> None:
     start = windows[0].end - FIVE_HOURS
     evs = [e for e in events if e.ts >= start and accounts.get(e.session_id) == "primary"]
@@ -102,9 +124,13 @@ def select_period(renders: list[Render], events: list[Event], since: float, unti
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("calibrate", "rewrites", "all"))
+    p.add_argument("command", choices=("calibrate", "capacity", "rewrites", "all"))
     p.add_argument("--sidecar", type=Path, default=Path.home() / ".cc-utility" / "sidecar-log.jsonl")
-    p.add_argument("--projects", type=Path, default=Path.home() / ".claude" / "projects")
+    p.add_argument("--projects", type=Path, action="append",
+                   help="Claude Code projects dir; repeat for each config dir (default ~/.claude/projects)")
+    p.add_argument("--proxy-usage", type=Path, action="append",
+                   help="JSONL from `python3 proxy.py LOG_DIR`; repeat per proxy host")
+    p.add_argument("--primary-email", help="email of the account the status-line readings belong to")
     p.add_argument("--since", type=_utc_date, required=True, help="UTC date, inclusive (YYYY-MM-DD)")
     p.add_argument("--until", type=_utc_date, required=True, help="UTC date, exclusive (YYYY-MM-DD)")
     p.add_argument("--boot", type=int, default=200)
@@ -112,10 +138,16 @@ def main() -> None:
     if args.since >= args.until:
         p.error("--since must be before --until")
 
-    renders, events = select_period(load_renders(args.sidecar), load_events(args.projects), args.since, args.until)
+    projects = args.projects or [Path.home() / ".claude" / "projects"]
+    if args.proxy_usage and not args.primary_email:
+        p.error("--proxy-usage needs --primary-email to know which account's requests the meter reflects")
+    proxy_events, proxy_accounts = load_proxy_events(args.proxy_usage or [], args.primary_email)
+    all_events = sorted(load_events(*projects) + proxy_events, key=lambda e: e.ts)
+    renders, events = select_period(load_renders(args.sidecar), all_events, args.since, args.until)
     if not renders:
         p.error(f"no status-line renders in {args.sidecar} for this period")
     primary, accounts = tag_accounts(renders)
+    accounts |= proxy_accounts
     print(f"period {_day(args.since)} to {_day(args.until)} (exclusive)")
     print(f"renders {len(renders)}, sessions primary/other "
           f"{sum(v == 'primary' for v in accounts.values())}/{sum(v == 'other' for v in accounts.values())}, "
@@ -128,6 +160,8 @@ def main() -> None:
                 f"({len(windows)} with usage %); need at least {MIN_WINDOWS}")
     if args.command in ("calibrate", "all"):
         calibrate(windows, five_hour_windows(renders, events, primary, accounts, include_unknown=True), args)
+    if args.command in ("capacity", "all"):
+        capacity_report(renders, windows, primary, accounts)
     if args.command in ("rewrites", "all"):
         rewrite_report(events, accounts, windows)
 

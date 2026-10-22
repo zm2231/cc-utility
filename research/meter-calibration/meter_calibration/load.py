@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 WEEK = 7 * 86400
+PROXY_PREFIX = "proxy:"
 FAMILIES = ("opus", "fable", "sonnet", "haiku")
 
 
@@ -103,11 +104,11 @@ def _marker(d: dict) -> str | None:
     return None
 
 
-def load_events(projects_dir: Path) -> list[Event]:
+def load_events(*projects_dirs: Path) -> list[Event]:
     """Transcripts repeat a message once per content block; the copy with the largest output count is the final one.
     Each call carries the attachment and system markers logged since the previous call in its stream."""
     best: dict[str, Event] = {}
-    for path in projects_dir.rglob("*.jsonl"):
+    for path in (p for d in projects_dirs for p in d.rglob("*.jsonl")):
         session_id, stream = _stream_of(path)
         pending: set[str] = set()
         marked: dict[str, frozenset[str]] = {}
@@ -151,3 +152,22 @@ def load_events(projects_dir: Path) -> list[Event]:
                 if prev is None or ev.output > prev.output:
                     best[msg["id"]] = ev
     return sorted(best.values(), key=lambda e: e.ts)
+
+
+def load_proxy_events(paths: list[Path], primary_email: str | None) -> tuple[list[Event], dict[str, str]]:
+    """Proxy requests carry their account email instead of a session, so each email becomes one pseudo-session tagged
+    primary or other; only successful attempts consumed quota."""
+    events, accounts = [], {}
+    for path in paths:
+        with path.open() as fh:
+            for line in fh:
+                r = json.loads(line)
+                if r.get("status") != 200 or not r.get("ts") or not r.get("account"):
+                    continue
+                sid = f"{PROXY_PREFIX}{r['account']}"
+                accounts[sid] = "primary" if r["account"] == primary_email else "other"
+                events.append(Event(
+                    parse_ts(r["ts"]), sid, r["file"], r.get("model") or "",
+                    r["input_tokens"], r["write_5m"], r["write_1h"], r["cache_read_input_tokens"], r["output_tokens"],
+                ))
+    return sorted(events, key=lambda e: e.ts), accounts

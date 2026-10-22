@@ -269,3 +269,105 @@ def test_markers_do_not_leak_across_transcript_files(tmp_path: Path):
     main1, sub1 = load_events(tmp_path)
     assert (main1.stream, main1.markers) == ("main", frozenset())
     assert (sub1.stream, sub1.markers) == ("agent-1", frozenset())
+
+
+def test_proxy_log_extracts_final_usage_per_claude_attempt(tmp_path: Path):
+    from meter_calibration.proxy import parse_log
+    start = {"type": "message_start", "message": {"model": "claude-opus-5-5", "usage": {
+        "input_tokens": 2, "cache_creation_input_tokens": 1739, "cache_read_input_tokens": 359316, "output_tokens": 36,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 1739}}}}
+    delta = {"type": "message_delta", "usage": {
+        "input_tokens": 2, "cache_creation_input_tokens": 1739, "cache_read_input_tokens": 359316, "output_tokens": 780}}
+    body = {"model": "claude-fable-5-1", "messages": [{"role": "user", "content": '"usage":{"output_tokens":99999}'}]}
+    log = "\n".join([
+        "=== REQUEST INFO ===", "Timestamp: 2026-10-22T14:26:22Z", "=== REQUEST BODY ===", json.dumps(body),
+        "=== API REQUEST 1 ===", "Timestamp: 2026-10-22T14:26:22.4Z",
+        "Auth: provider=claude, auth_id=claude-1-a@x.com.json, label=a@x.com, type=oauth",
+        "=== API RESPONSE 1 ===", "Status: 429", "",
+        "=== API REQUEST 2 ===", "Timestamp: 2026-10-22T14:26:23Z",
+        "Auth: provider=claude, auth_id=claude-2-b@x.com.json, label=b@x.com, type=oauth",
+        "=== API RESPONSE 2 ===", "Status: 200", "data: " + json.dumps(start), "data: " + json.dumps(delta),
+        "=== RESPONSE ===", "Status: 200", "data: " + json.dumps(start),
+    ])
+    f = tmp_path / "v1-messages-x.log"
+    f.write_text(log)
+    (rec,) = parse_log(f)
+    assert (rec["attempt"], rec["account"], rec["model"], rec["status"]) == (2, "b@x.com", "claude-opus-5-5", 200)
+    assert (rec["output_tokens"], rec["cache_read_input_tokens"], rec["write_1h"]) == (780, 359316, 1739)
+
+
+def test_proxy_log_skips_non_claude_files(tmp_path: Path):
+    from meter_calibration.proxy import parse_log
+    f = tmp_path / "v1-responses-x.log"
+    f.write_text("=== API REQUEST 1 ===\nAuth: provider=codex, auth_id=codex-a.json, label=a@x.com, type=oauth\n"
+                 "=== API RESPONSE 1 ===\nStatus: 200\ndata: {\"usage\": {\"output_tokens\": 5}}\n")
+    assert parse_log(f) == []
+
+
+def test_events_merge_across_config_dirs_without_double_counting(tmp_path: Path):
+    def call(mid, out):
+        return json.dumps({"timestamp": "2026-10-01T00:00:00Z", "message": {
+            "id": mid, "model": "claude-opus-5-5", "usage": {"input_tokens": 1, "output_tokens": out}}})
+    for name, lines in (("a", [call("m1", 3), call("m2", 1)]), ("b", [call("m1", 7), call("m3", 1)])):
+        d = tmp_path / name / "proj"
+        d.mkdir(parents=True)
+        (d / f"s-{name}.jsonl").write_text("\n".join(lines))
+    evs = load_events(tmp_path / "a", tmp_path / "b")
+    assert sorted(e.output for e in evs) == [1, 1, 7]
+
+
+def test_proxy_events_tag_accounts_by_email(tmp_path: Path):
+    from meter_calibration.load import load_proxy_events
+    rows = [
+        {"file": "a.log", "attempt": 1, "ts": "2026-10-22T14:26:22.289067734Z", "account": "me@x.com",
+         "model": "claude-opus-5-5", "status": 200, "input_tokens": 2, "cache_creation_input_tokens": 9,
+         "cache_read_input_tokens": 100, "output_tokens": 7, "write_5m": 0, "write_1h": 9},
+        {"file": "b.log", "attempt": 1, "ts": "2026-10-22T11:33:25-04:00", "account": "other@x.com",
+         "model": "claude-opus-5-5", "status": 200, "input_tokens": 1, "cache_creation_input_tokens": 0,
+         "cache_read_input_tokens": 0, "output_tokens": 1, "write_5m": 0, "write_1h": 0},
+        {"file": "c.log", "attempt": 1, "ts": "2026-10-22T15:00:00Z", "account": "me@x.com",
+         "model": "claude-opus-5-5", "status": 529, "input_tokens": 1, "cache_creation_input_tokens": 0,
+         "cache_read_input_tokens": 0, "output_tokens": 50, "write_5m": 0, "write_1h": 0},
+    ]
+    f = tmp_path / "u.jsonl"
+    f.write_text("\n".join(json.dumps(r) for r in rows))
+    events, accounts = load_proxy_events([f], "me@x.com")
+    assert accounts == {"proxy:me@x.com": "primary", "proxy:other@x.com": "other"}
+    assert [(e.session_id, e.write_1h, e.output) for e in events] == [("proxy:me@x.com", 9, 7), ("proxy:other@x.com", 0, 1)]
+
+
+def test_cli_requires_primary_email_with_proxy_usage(tmp_path, monkeypatch, capsys):
+    code, err = _run_cli("all", "--since", "2026-07-01", "--until", "2026-07-02", "--proxy-usage", str(tmp_path / "u"),
+                         "--sidecar", str(tmp_path / "x"), monkeypatch=monkeypatch, capsys=capsys)
+    assert code == 2 and "--primary-email" in err
+
+
+def test_proxy_misses_are_not_stream_starts():
+    evs = [_ev(0, w5=50_000, sid="proxy:me@x.com", stream="a.log"), _ev(5, w5=50_000, sid="s")]
+    causes = {c.event.session_id: c.cause for c in rewrites.classify(evs)}
+    assert causes == {"proxy:me@x.com": "proxy request (no session context)", "s": "stream start"}
+
+
+def test_five_hour_capacity_per_token_type():
+    from meter_calibration.capacity import five_hour_capacity
+    caps = five_hour_capacity({"opus": 2.0, "fable": 0.0})
+    assert caps == {"opus": {"fresh": 50.0, "write_5m": 40.0, "write_1h": 25.0, "output": 10.0}}
+
+
+def test_weekly_ratio_recovers_known_relationship():
+    from meter_calibration.capacity import weekly_per_five_hour
+    week_end = 30 * 86400.0
+    renders, windows = [], []
+    weekly = 0.0
+    for i in range(24):
+        start = i * 6 * 3600.0 + 3600
+        end = start + 5 * 3600
+        pct = float(10 + (i % 5) * 10)
+        renders.append(Render(start - 60, "p", 0.0, start, weekly, week_end))
+        weekly += 0.2 * pct
+        renders.append(Render(end - 600, "p", pct, end, weekly, week_end))
+        w = Window(end=end, pct=pct, renders=10, observed_at=end - 600)
+        windows.append(w)
+    wk = weekly_per_five_hour(renders, windows, weekly_phase(week_end), {"p": "primary"}, n=50)
+    assert abs(wk.ratio - 0.2) < 1e-9 and wk.windows == 24
+    assert abs(wk.windows_per_week[0] - 5.0) < 1e-6

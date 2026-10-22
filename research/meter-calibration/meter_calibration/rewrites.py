@@ -2,10 +2,10 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from .fit import API_WEIGHTS
-from .load import Event
+from .load import PROXY_PREFIX, Event
 
 CAUSES = (
-    "stream start", "after compaction", "idle expiry", "model switch", "tool/agent list changed", "date change",
+    "proxy request (no session context)", "stream start", "after compaction", "idle expiry", "model switch", "tool/agent list changed", "date change",
     "other prefix change",
 )
 COMPACTION_MARKERS = frozenset({"system:compact_boundary", "attachment:compact_file_reference", "attachment:invoked_skills"})
@@ -45,7 +45,9 @@ def classify(events: list[Event]) -> list[Classified]:
             gap = e.ts - prev.ts if prev else 0.0
             cause = None
             if is_rewrite(e):
-                if prev is None:
+                if e.session_id.startswith(PROXY_PREFIX):
+                    cause = "proxy request (no session context)"
+                elif prev is None:
                     cause = "stream start"
                 elif e.markers & COMPACTION_MARKERS or e.context < 0.6 * prev.context:
                     cause = "after compaction"

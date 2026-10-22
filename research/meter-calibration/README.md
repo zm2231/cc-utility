@@ -2,8 +2,9 @@
 
 Estimates how the Claude subscription 5-hour usage meter weights each token
 type (fresh input, 5m and 1h cache writes, cache reads, output) per model
-family, by matching the usage % your status line saw against the tokens your
-Claude Code transcripts record for the same window.
+family, by matching the usage % your status line saw against every token
+the account spent in the same window, then converts the weights into how many
+tokens fill a 5h window and a week.
 
 Anthropic publishes no formula. Its help center only says cached content
 "counts less against your limits". This measures it for one account.
@@ -13,7 +14,16 @@ Anthropic publishes no formula. Its help center only says cached content
 - `~/.cc-utility/sidecar-log.jsonl`, written by
   `integrations/pacekit-sidecar/statusline.sh` when `CC_UTILITY_SIDECAR_LOG` is
   set: one line per status-line render with 5h/7d usage % and reset times.
-- `~/.claude/projects/**/*.jsonl`, including `subagents/`.
+- Claude Code transcripts (`projects/**/*.jsonl`, including `subagents/`) from
+  every config dir that ran on the account, one `--projects` each.
+- CLIProxyAPI request logs from every proxy that routes to the account.
+  `meter_calibration/proxy.py` is stdlib-only so it runs on the proxy host;
+  it reads response sections only and emits time, account, model, status and
+  token counts, never prompt content:
+
+  ```bash
+  python3 meter_calibration/proxy.py /path/to/cliproxy/logs > usage.jsonl
+  ```
 
 ## Run
   
@@ -30,7 +40,10 @@ Anthropic publishes no formula. Its help center only says cached content
    reflected in it. Windows at 100% are censored and dropped.
 2. **Accounts.** The sidecar has no account field. Each account has a fixed
    weekly reset hour, so sessions are tagged by the reset hour they rendered
-   and only the most common one (primary) is used. Sessions that never
+   and only the most common one (primary) is used. Proxy requests carry their
+   account email; `--primary-email` names the primary account's email (the
+   `/api/oauth/usage` endpoint reports each account's reset time, which is
+   how the email was matched to the reset hour). Sessions that never
    rendered a status line (headless `-p` runs) have no proven account and are
    excluded; the CLI prints the result with them included as a sensitivity
    line. Renders whose reset had already passed are stale and dropped.
