@@ -51,8 +51,6 @@ def parse_log(path: Path) -> list[dict]:
                     a["ts"] = line.split(":", 1)[1].strip()
                 elif (am := AUTH.match(line)):
                     a["provider"], a["account"] = am.group(1), am.group(2).strip()
-                    if a["provider"] != "claude" and not any(x.get("provider") == "claude" for x in attempts.values()):
-                        return []
                 continue
             if line.startswith("Status:") and "status" not in a:
                 a["status"] = int(line.split(":", 1)[1].strip() or 0)

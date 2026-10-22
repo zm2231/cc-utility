@@ -34,6 +34,7 @@ class WeeklyRatio:
 
 def weekly_per_five_hour(
     renders: list[Render], windows: list[Window], primary_phase: int, accounts: dict[str, str], n: int = 500, seed: int = 0,
+    min_pairs: int = 30,
 ) -> WeeklyRatio:
     """Weekly % gained per 5h % across each window: the weekly reading just before the window starts against the
     highest weekly reading up to the render that supplied the window's 5h %, within the same weekly cycle."""
@@ -53,6 +54,9 @@ def weekly_per_five_hour(
         used.append(w)
         x.append(w.pct)
         y.append(max(inside) - own[i].seven_day_pct)
+    if len(used) < min_pairs:
+        raise ValueError(f"only {len(used)} 5h windows pair with a weekly reading from the same weekly cycle; "
+                         f"need at least {min_pairs}")
     xs, ys = np.array(x), np.array(y)
     ratio = float((xs * ys).sum() / (xs * xs).sum())
     blocks = week_blocks(used)

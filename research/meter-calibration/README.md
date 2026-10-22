@@ -25,6 +25,13 @@ Anthropic publishes no formula. Its help center only says cached content
   python3 meter_calibration/proxy.py /path/to/cliproxy/logs > usage.jsonl
   ```
 
+  For large log folders, pass only the files that touched a Claude account:
+
+  ```bash
+  rg -l 'Auth: provider=claude' /path/to/cliproxy/logs \
+    | xargs -n 500 python3 meter_calibration/proxy.py /path/to/cliproxy/logs > usage.jsonl
+  ```
+
 ## Run
 
 ```bash

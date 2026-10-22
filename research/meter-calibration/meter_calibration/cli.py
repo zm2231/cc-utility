@@ -158,10 +158,15 @@ def main() -> None:
     if with_tokens < MIN_WINDOWS:
         p.error(f"only {with_tokens} usable 5h windows with Claude Code token data in this period "
                 f"({len(windows)} with usage %); need at least {MIN_WINDOWS}")
+    if len({w.pct for w in windows}) < 2:
+        p.error("the 5h usage % is the same in every window, so there is no variation to fit")
     if args.command in ("calibrate", "all"):
         calibrate(windows, five_hour_windows(renders, events, primary, accounts, include_unknown=True), args)
     if args.command in ("capacity", "all"):
-        capacity_report(renders, windows, primary, accounts)
+        try:
+            capacity_report(renders, windows, primary, accounts)
+        except ValueError as e:
+            p.error(str(e))
     if args.command in ("rewrites", "all"):
         rewrite_report(events, accounts, windows)
 

@@ -368,6 +368,107 @@ def test_weekly_ratio_recovers_known_relationship():
         renders.append(Render(end - 600, "p", pct, end, weekly, week_end))
         w = Window(end=end, pct=pct, renders=10, observed_at=end - 600)
         windows.append(w)
-    wk = weekly_per_five_hour(renders, windows, weekly_phase(week_end), {"p": "primary"}, n=50)
+    wk = weekly_per_five_hour(renders, windows, weekly_phase(week_end), {"p": "primary"}, n=50, min_pairs=10)
     assert abs(wk.ratio - 0.2) < 1e-9 and wk.windows == 24
     assert abs(wk.windows_per_week[0] - 5.0) < 1e-6
+
+
+def test_proxy_log_keeps_claude_retry_after_non_claude_attempt(tmp_path: Path):
+    from meter_calibration.proxy import parse_log
+    usage = {"input_tokens": 3, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 10, "output_tokens": 40}
+    f = tmp_path / "v1-messages-x.log"
+    f.write_text("\n".join([
+        "=== API REQUEST 1 ===", "Timestamp: 2026-10-22T10:00:00Z",
+        "Auth: provider=codex, auth_id=codex-a.json, label=a@x.com, type=oauth",
+        "=== API RESPONSE 1 ===", "Status: 200", "data: " + json.dumps({"usage": {"output_tokens": 999}}),
+        "=== API REQUEST 2 ===", "Timestamp: 2026-10-22T10:00:01Z",
+        "Auth: provider=claude, auth_id=claude-b.json, label=b@x.com, type=oauth",
+        "=== API RESPONSE 2 ===", "Status: 200",
+        "data: " + json.dumps({"type": "message_delta", "usage": usage}),
+    ]))
+    (rec,) = parse_log(f)
+    assert (rec["attempt"], rec["account"], rec["output_tokens"]) == (2, "b@x.com", 40)
+
+
+def test_proxy_log_reads_non_streaming_json_response(tmp_path: Path):
+    from meter_calibration.proxy import parse_log
+    body = {"id": "msg_1", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "hi"}], "usage": {
+        "input_tokens": 5, "cache_creation_input_tokens": 70, "cache_read_input_tokens": 900, "output_tokens": 12,
+        "cache_creation": {"ephemeral_5m_input_tokens": 70, "ephemeral_1h_input_tokens": 0}}}
+    f = tmp_path / "v1-messages-y.log"
+    f.write_text("\n".join([
+        "=== API REQUEST 1 ===", "Timestamp: 2026-10-22T10:00:00Z",
+        "Auth: provider=claude, auth_id=claude-b.json, label=b@x.com, type=oauth",
+        "=== API RESPONSE 1 ===", "Status: 200", json.dumps(body),
+    ]))
+    (rec,) = parse_log(f)
+    assert (rec["model"], rec["input_tokens"], rec["write_5m"], rec["cache_read_input_tokens"], rec["output_tokens"]) == (
+        "claude-opus-5-5", 5, 70, 900, 12)
+
+
+def test_proxy_main_accepts_absolute_paths_from_prefilter(tmp_path: Path, monkeypatch, capsys):
+    from meter_calibration import proxy
+    f = tmp_path / "v1-messages-z.log"
+    f.write_text("=== API REQUEST 1 ===\nAuth: provider=claude, auth_id=c.json, label=b@x.com, type=oauth\n"
+                 "=== API RESPONSE 1 ===\nStatus: 200\n" + json.dumps({"model": "claude-opus-5-5", "usage": {
+                     "input_tokens": 1, "output_tokens": 2}}) + "\n")
+    monkeypatch.setattr("sys.argv", ["proxy.py", str(tmp_path), str(f)])
+    proxy.main()
+    assert json.loads(capsys.readouterr().out)["output_tokens"] == 2
+
+
+def test_weekly_ratio_rejects_unpaired_windows():
+    import pytest
+
+    from meter_calibration.capacity import weekly_per_five_hour
+    with pytest.raises(ValueError, match="only 0 5h windows pair"):
+        weekly_per_five_hour([], [], 0, {})
+
+
+def test_cli_capacity_rejects_windows_without_weekly_pairing(tmp_path, monkeypatch, capsys):
+    from datetime import UTC, datetime
+    week = 7 * 86400
+    t0 = datetime(2026, 1, 1, tzinfo=UTC).timestamp()
+    rows, calls = [], []
+    for i in range(32):
+        start = t0 + i * week + 3600
+        for j in range(6):
+            ts = start + 60 * (j + 1)
+            rows.append({"ts": datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "session_id": "p",
+                         "five_hour_pct": 10 + i % 5, "five_hour_reset": start + 5 * 3600 - ts, "seven_day_pct": 3,
+                         "seven_day_reset": t0 + (i + 1) * week - ts})
+        calls.append(json.dumps({"timestamp": datetime.fromtimestamp(start + 30, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                 "message": {"id": f"m{i}", "model": "claude-opus-5-5",
+                                             "usage": {"input_tokens": 100, "output_tokens": 50}}}))
+    (tmp_path / "log.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+    proj = tmp_path / "projects" / "proj"
+    proj.mkdir(parents=True)
+    (proj / "p.jsonl").write_text("\n".join(calls))
+    code, err = _run_cli("capacity", "--since", "2026-01-01", "--until", "2026-12-31", "--sidecar",
+                         str(tmp_path / "log.jsonl"), "--projects", str(tmp_path / "projects"),
+                         monkeypatch=monkeypatch, capsys=capsys)
+    assert code == 2 and "only 0 5h windows pair with a weekly reading" in err and "nan" not in err.lower()
+
+
+def test_cli_rejects_constant_usage(tmp_path, monkeypatch, capsys):
+    from datetime import UTC, datetime
+    t0 = datetime(2026, 1, 1, tzinfo=UTC).timestamp()
+    rows, calls = [], []
+    for i in range(32):
+        start = t0 + i * 6 * 3600
+        for j in range(6):
+            ts = start + 60 * (j + 1)
+            rows.append({"ts": datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "session_id": "p",
+                         "five_hour_pct": 10, "five_hour_reset": start + 5 * 3600 - ts, "seven_day_pct": 3,
+                         "seven_day_reset": t0 + 30 * 86400 - ts})
+        calls.append(json.dumps({"timestamp": datetime.fromtimestamp(start + 30, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                 "message": {"id": f"m{i}", "model": "claude-opus-5-5",
+                                             "usage": {"input_tokens": 100, "output_tokens": 50}}}))
+    (tmp_path / "log.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+    proj = tmp_path / "projects" / "proj"
+    proj.mkdir(parents=True)
+    (proj / "p.jsonl").write_text("\n".join(calls))
+    code, err = _run_cli("all", "--since", "2026-01-01", "--until", "2026-12-31", "--sidecar",
+                         str(tmp_path / "log.jsonl"), "--projects", str(tmp_path / "projects"),
+                         monkeypatch=monkeypatch, capsys=capsys)
+    assert code == 2 and "no variation to fit" in err
