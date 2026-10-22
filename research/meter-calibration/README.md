@@ -96,7 +96,10 @@ the measured one; it contains no emails, session ids or prompt text.
    subagent rewrites within 5 minutes of the previous call (cache not reused)
    versus after a longer pause (5-minute cache expired); 5h rises with no
    logged call; compactions after about an hour of quiet (idle compaction);
-   headless (`claude -p`, SDK) against interactive rates.
+   headless (`claude -p`, SDK) against interactive rates. Every section covers
+   only the measured account's sessions inside `--since`/`--until`, except the
+   headless comparison: headless sessions never render a status line, so it
+   assumes they ran on the measured account and says so in the JSON.
 
 ## Limits
 

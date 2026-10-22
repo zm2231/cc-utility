@@ -187,3 +187,31 @@ def test_cli_report_requires_out(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         cli.main()
     assert exc.value.code == 2 and "report needs --out" in capsys.readouterr().err
+
+
+def test_report_covers_only_the_measured_account_inside_the_period():
+    from meter_calibration import report
+    t0 = datetime(2026, 1, 1, tzinfo=UTC).timestamp()
+    since = t0 + 86400
+    renders, events, sessions = [], [], {}
+    for i in range(40):
+        start = since + i * 6 * 3600
+        for j in range(6):
+            ts = start + 60 * (j + 1)
+            renders.append(Render(ts, "a", 5.0 + i % 7 + j, start + 5 * 3600, float(i % 28) + j * 0.5,
+                                  t0 + (i // 28 + 1) * 7 * 86400 + 86400))
+        renders.append(Render(start + 30, "b", 50.0, start + 5 * 3600, 50.0, t0 + 3 * 86400 + 6 * 3600))
+        events.append(_ev(start + 30, fresh=100_000 * (1 + i % 7), out=5_000, sid="a"))
+    events += [_ev(since - 60, out=7_777, sid="a"), _ev(since + 100, out=8_888, sid="b"),
+               _ev(since + 200, out=9_999, sid="headless", entry="sdk-cli")]
+    sessions = {"a": Session(prompts=[since - 120, since + 10]), "b": Session(prompts=[since + 90]),
+                "headless": Session(prompts=[since + 190])}
+    events.sort(key=lambda e: e.ts)
+    accounts = {"a": "primary", "b": "other"}
+    data = report.build(renders, events, sessions, weekly_phase(renders[0].seven_day_reset), accounts, since,
+                        since + 20 * 86400, [], boot=5)
+    assert min(d["day"] for d in data["daily"]) == _iso(since)[:10]
+    outputs = sum(d["tokens_by_type"]["output"] for d in data["daily"]) * 1e6
+    assert round(outputs) == 40 * 5_000
+    assert sum(d["prompts"] for d in data["daily"]) == 1
+    assert data["rates"]["headless"]["assumes"]

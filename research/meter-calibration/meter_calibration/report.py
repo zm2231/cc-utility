@@ -49,7 +49,8 @@ def _turn_summary(ts: list[Turn]) -> dict:
 def build(renders: list[Render], events: list[Event], sessions: dict[str, Session], primary: int,
           accounts: dict[str, str], since: float, until: float, breaks: list[float], boot: int = 200) -> dict:
     labels = account_labels(renders, primary)
-    mine = [e for e in events if accounts.get(e.session_id) == "primary" and e.family is not None]
+    measured = [e for e in events if since <= e.ts < until and accounts.get(e.session_id) == "primary"
+                and e.family is not None]
     family_windows = five_hour_windows(renders, events, primary, accounts)
     model_windows = five_hour_windows(renders, events, primary, accounts, group=by_model)
     best = fit.best_rho(family_windows)
@@ -61,14 +62,14 @@ def build(renders: list[Render], events: list[Event], sessions: dict[str, Sessio
 
     weeks = [(a, a + WEEK) for a in np.arange(since, until, WEEK)]
     segs = segments(since, until, breaks)
-    all_turns = turns([e for e in events if e.family is not None], sessions)
+    all_turns = [t for t in turns(measured, sessions) if t.ts < until]
     top_models = [m for m, _ in Counter(t.model for t in all_turns if since <= t.ts < until).most_common(5)]
 
     return {
         "period": {"since": since, "until": until, "breaks": breaks},
         "accounts": [{"label": labels[p], "renders": n, "measured": p == primary}
                      for p, n in Counter(weekly_phase(r.seven_day_reset) for r in renders).most_common()],
-        "daily": _daily(renders, mine, all_turns, labels),
+        "daily": _daily(renders, measured, all_turns, labels),
         "resets": [{"account": labels.get(r["phase"], "?"), **{k: v for k, v in r.items() if k != "phase"}}
                    for r in checks.off_schedule_resets(renders)],
         "five_hour_windows": [{"end": w.end, "pct": w.pct} for w in family_windows],
@@ -86,15 +87,18 @@ def build(renders: list[Render], events: list[Event], sessions: dict[str, Sessio
                            for a, b in segs if len(ws := window_slice(model_windows, a, b)) >= 10],
             "by_week": [{"since": float(a), "windows": len(ws), "rates": checks.group_rates(ws)}
                         for a, b in weeks if len(ws := window_slice(model_windows, a, b)) >= 4],
-            "headless": checks.group_rates(five_hour_windows(renders, events, primary, accounts, include_unknown=True,
-                                                             group=by_model_and_entrypoint)),
+            "headless": {
+                "assumes": "sessions without status-line readings ran on the measured account",
+                "rates": checks.group_rates(five_hour_windows(renders, events, primary, accounts, include_unknown=True,
+                                                              group=by_model_and_entrypoint)),
+            },
         },
         "weekly": {
             "ratio": overall_ratio,
             "ratio_by_segment": [{"since": a, "until": b, **(r or {})}
                                  for a, b in segs if (r := checks.weekly_ratio(renders, window_slice(model_windows, a, b),
                                                                                primary, accounts))],
-            "cycles": _cycles(renders, mine, primary, accounts, model_scales, overall_ratio),
+            "cycles": _cycles(renders, measured, primary, accounts, model_scales, overall_ratio),
             "observed_vs_predicted": checks.weekly_observed_vs_predicted(
                 renders, events, primary, accounts, model_scales, overall_ratio["ratio"], by_model)
             if overall_ratio else [],
@@ -106,19 +110,18 @@ def build(renders: list[Render], events: list[Event], sessions: dict[str, Sessio
                                                        if len(ts := [t for t in all_turns if t.model == m and a <= t.ts < b]) >= 30}}
                         for a, b in weeks],
         },
-        "cache_ttl_by_day": checks.cache_ttl_by_day([e for e in events if since <= e.ts < until]),
-        "stuck_subagent_cache": checks.stuck_subagent_cache([e for e in events if since <= e.ts < until]),
-        "subagent_cache_expiry": checks.subagent_cache_expiry(
-            [e for e in mine if since <= e.ts < until]),
+        "cache_ttl_by_day": checks.cache_ttl_by_day(measured),
+        "stuck_subagent_cache": checks.stuck_subagent_cache(measured),
+        "subagent_cache_expiry": checks.subagent_cache_expiry(measured),
         "phantom": checks.phantom_rises(renders, events, primary, accounts),
-        "idle_compactions": checks.idle_compactions(sessions, events, since),
+        "idle_compactions": [c for c in checks.idle_compactions(sessions, measured, since) if c["at"] < until],
     }
 
 
-def _daily(renders: list[Render], mine: list[Event], all_turns: list[Turn], labels: dict[int, str]) -> list[dict]:
+def _daily(renders: list[Render], measured: list[Event], all_turns: list[Turn], labels: dict[int, str]) -> list[dict]:
     days: dict[str, dict] = defaultdict(lambda: {"models": defaultdict(float), "types": np.zeros(len(COLUMNS)),
                                                  "subagent": 0.0, "proxy": 0.0, "weekly": {}, "prompts": 0})
-    for e in mine:
+    for e in measured:
         d = days[_day(e.ts)]
         eq = api_equivalent(e) / 1e6
         d["models"][e.model_id] += eq
@@ -137,7 +140,7 @@ def _daily(renders: list[Render], mine: list[Event], all_turns: list[Turn], labe
             for day, d in sorted(days.items())]
 
 
-def _cycles(renders: list[Render], mine: list[Event], primary: int, accounts: dict[str, str],
+def _cycles(renders: list[Render], measured: list[Event], primary: int, accounts: dict[str, str],
             scales: dict[str, float], ratio: dict | None) -> list[dict]:
     own = checks.own_renders(renders, primary, accounts)
     by_cycle: dict[int, list[Render]] = defaultdict(list)
@@ -146,7 +149,7 @@ def _cycles(renders: list[Render], mine: list[Event], primary: int, accounts: di
     out = []
     for hour, rs in sorted(by_cycle.items()):
         end = hour * 3600.0
-        evs = [e for e in mine if end - WEEK <= e.ts < end]
+        evs = [e for e in measured if end - WEEK <= e.ts < end]
         eq = sum(scales.get(e.model_id or "", 0.0) * api_equivalent(e) for e in evs) / 1e6
         out.append({"end": end, "observed_high": max(r.seven_day_pct for r in rs),
                     "complete": min(r.ts for r in rs) < end - WEEK + 86400,
