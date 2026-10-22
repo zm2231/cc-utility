@@ -53,7 +53,7 @@ def cache_ttl_by_day(events: list[Event]) -> list[dict]:
             for day, d in sorted(days.items())]
 
 
-def stuck_subagent_cache(events: list[Event], min_write: int = 50_000, max_gap: float = 300) -> list[dict]:
+def stuck_subagent_cache(events: list[Event], since: float = 0.0, min_write: int = 50_000, max_gap: float = 300) -> list[dict]:
     """Subagent calls that re-write most of their context although the previous call in the same subagent was moments
     ago, so its cache was still warm: the cache was not reused. Grouped by Claude Code version."""
     streams: dict[tuple[str, str], list[Event]] = defaultdict(list)
@@ -64,7 +64,7 @@ def stuck_subagent_cache(events: list[Event], min_write: int = 50_000, max_gap: 
     for evs in streams.values():
         evs.sort(key=lambda e: e.ts)
         for prev, e in itertools.pairwise(evs):
-            if e.ts - prev.ts <= max_gap and e.write >= min_write and e.read < 0.25 * e.context:
+            if e.ts >= since and e.ts - prev.ts <= max_gap and e.write >= min_write and e.read < 0.25 * e.context:
                 v = by_version[e.version or "?"]
                 v["calls"] += 1
                 v["written"] += e.write
@@ -73,14 +73,14 @@ def stuck_subagent_cache(events: list[Event], min_write: int = 50_000, max_gap: 
                 v["last"] = max(v["last"] or e.ts, e.ts)
     calls = defaultdict(int)
     for e in events:
-        if e.is_subagent:
+        if e.is_subagent and e.ts >= since:
             calls[e.version or "?"] += 1
     return [{"version": ver, "calls": v["calls"], "subagent_calls": calls[ver], "written": v["written"],
              "subagents": len(v["subagents"]), "first": v["first"], "last": v["last"]}
             for ver, v in sorted(by_version.items())]
 
 
-def subagent_cache_expiry(events: list[Event], min_write: int = 50_000, ttl: float = 300) -> dict:
+def subagent_cache_expiry(events: list[Event], since: float = 0.0, min_write: int = 50_000, ttl: float = 300) -> dict:
     """Subagent calls that re-write most of their context after pausing longer than the 5-minute cache: the cost of
     subagents writing at the 5-minute TTL, and how much of it a 1-hour TTL would have kept."""
     streams: dict[tuple[str, str], list[Event]] = defaultdict(list)
@@ -92,7 +92,7 @@ def subagent_cache_expiry(events: list[Event], min_write: int = 50_000, ttl: flo
         evs.sort(key=lambda e: e.ts)
         for prev, e in itertools.pairwise(evs):
             gap = e.ts - prev.ts
-            if gap > ttl and e.write_5m >= min_write and e.read < 0.25 * e.context:
+            if e.ts >= since and gap > ttl and e.write_5m >= min_write and e.read < 0.25 * e.context:
                 gaps.append(gap / 60)
                 written += e.write
                 under_hour += e.write if gap <= 3600 else 0
@@ -102,9 +102,10 @@ def subagent_cache_expiry(events: list[Event], min_write: int = 50_000, ttl: flo
 
 def phantom_rises(renders: list[Render], events: list[Event], primary_phase: int, accounts: dict[str, str],
                   min_points: float = 2) -> dict:
-    """Rises in a 5h window's highest reading with no logged call from any source since the previous high. Using the
-    running high ignores stale readings that other open sessions keep showing."""
-    times = [e.ts for e in events]
+    """Rises in a 5h window's highest reading with no logged call since the previous high that could have reached this
+    meter: calls from the measured account or from sessions with no known account. Using the running high ignores stale
+    readings that other open sessions keep showing."""
+    times = [e.ts for e in events if accounts.get(e.session_id) != "other"]
     windows: dict[int, list[Render]] = defaultdict(list)
     for r in own_renders(renders, primary_phase, accounts):
         windows[round(r.five_hour_reset / 60)].append(r)

@@ -108,7 +108,8 @@ def test_phantom_rises_ignore_stale_readings_and_logged_calls():
     end = 50_000.0
     rs = [Render(end - 4000, "p", 10, end, 1, WEEK_END), Render(end - 3900, "q", 5, end, 1, WEEK_END),
           Render(end - 3800, "p", 14, end, 1, WEEK_END), Render(end - 3000, "p", 20, end, 1, WEEK_END)]
-    out = checks.phantom_rises(rs, [_ev(end - 3880, out=10)], weekly_phase(WEEK_END), {"p": "primary", "q": "primary"})
+    calls = [_ev(end - 3880, out=10), _ev(end - 3400, out=10, sid="elsewhere")]
+    out = checks.phantom_rises(rs, calls, weekly_phase(WEEK_END), {"p": "primary", "q": "primary", "elsewhere": "other"})
     assert (out["rises"], out["points"]) == (2, 10)
     assert [(p["points"], p["minutes"]) for p in out["phantom"]] == [(6, 800 / 60)]
 
@@ -215,3 +216,15 @@ def test_report_covers_only_the_measured_account_inside_the_period():
     assert round(outputs) == 40 * 5_000
     assert sum(d["prompts"] for d in data["daily"]) == 1
     assert data["rates"]["headless"]["assumes"]
+
+
+def test_checks_use_the_call_before_the_period_without_counting_it():
+    since = 10_000.0
+    events = [_ev(since - 30, w5=20_000, stream="agent-1"), _ev(since + 10, w5=200_000, read=18_000, stream="agent-1"),
+              _ev(since - 600, w5=20_000, stream="agent-2"), _ev(since + 10, w5=200_000, read=18_000, stream="agent-2"),
+              _ev(since - 50 * 60, out=1)]
+    (stuck,) = checks.stuck_subagent_cache(events, since)
+    assert (stuck["calls"], stuck["subagent_calls"]) == (1, 2)
+    assert checks.subagent_cache_expiry(events, since)["calls"] == 1
+    sessions = {"s": Session(prompts=[0.0], compactions=[Compaction(since + 4 * 60, 300_000, 20_000)])}
+    assert len(checks.idle_compactions(sessions, events, since)) == 1

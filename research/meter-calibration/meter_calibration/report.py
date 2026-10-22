@@ -49,8 +49,8 @@ def _turn_summary(ts: list[Turn]) -> dict:
 def build(renders: list[Render], events: list[Event], sessions: dict[str, Session], primary: int,
           accounts: dict[str, str], since: float, until: float, breaks: list[float], boot: int = 200) -> dict:
     labels = account_labels(renders, primary)
-    measured = [e for e in events if since <= e.ts < until and accounts.get(e.session_id) == "primary"
-                and e.family is not None]
+    history = [e for e in events if e.ts < until and accounts.get(e.session_id) == "primary" and e.family is not None]
+    measured = [e for e in history if e.ts >= since]
     family_windows = five_hour_windows(renders, events, primary, accounts)
     model_windows = five_hour_windows(renders, events, primary, accounts, group=by_model)
     best = fit.best_rho(family_windows)
@@ -111,10 +111,10 @@ def build(renders: list[Render], events: list[Event], sessions: dict[str, Sessio
                         for a, b in weeks],
         },
         "cache_ttl_by_day": checks.cache_ttl_by_day(measured),
-        "stuck_subagent_cache": checks.stuck_subagent_cache(measured),
-        "subagent_cache_expiry": checks.subagent_cache_expiry(measured),
+        "stuck_subagent_cache": checks.stuck_subagent_cache(history, since),
+        "subagent_cache_expiry": checks.subagent_cache_expiry(history, since),
         "phantom": checks.phantom_rises(renders, events, primary, accounts),
-        "idle_compactions": [c for c in checks.idle_compactions(sessions, measured, since) if c["at"] < until],
+        "idle_compactions": [c for c in checks.idle_compactions(sessions, history, since) if c["at"] < until],
     }
 
 
