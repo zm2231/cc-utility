@@ -12,7 +12,7 @@ real percentage utilization.
 ## Install
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/zm2231/cc-utility.git
 cd cc-utility
 npm install && npm run build
 ```
