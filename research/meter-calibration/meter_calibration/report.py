@@ -72,7 +72,10 @@ def build(renders: list[Render], events: list[Event], sessions: dict[str, Sessio
         "daily": _daily(renders, measured, all_turns, labels),
         "resets": [{"account": labels.get(r["phase"], "?"), **{k: v for k, v in r.items() if k != "phase"}}
                    for r in checks.off_schedule_resets(renders)],
-        "five_hour_windows": [{"end": w.end, "pct": w.pct} for w in family_windows],
+        "five_hour_windows": [{"end": w.end, "pct": w.pct, "observed_at": w.observed_at, "renders": w.renders,
+                               "tokens": {g: [float(v) / 1e6 for v in t] for g, t in w.tokens.items() if t.sum() > 0}}
+                              for w in model_windows],
+        "token_columns": list(COLUMNS),
         "cache_read_weight": {
             "r2_by_rho": {str(r): fit.fit_scales(family_windows, r).r2 for r in (0, 0.01, 0.025, 0.05, 0.1, 0.2)},
             "best": best,

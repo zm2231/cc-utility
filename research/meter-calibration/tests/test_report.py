@@ -180,6 +180,9 @@ def test_cli_report_writes_json(tmp_path, monkeypatch, capsys):
     assert data["accounts"] == [{"label": "A", "renders": 240, "measured": True}]
     assert set(data["rates"]["by_model"]) == {"opus-5-5"}
     assert sum(d["prompts"] for d in data["daily"]) == 40
+    first = data["five_hour_windows"][0]
+    assert data["token_columns"] == ["fresh", "write_5m", "write_1h", "read", "output"]
+    assert first["tokens"] == {"opus-5-5": [0.1, 0.0, 0.0, 0.0, 0.005]}
 
 
 def test_cli_report_requires_out(tmp_path, monkeypatch, capsys):
@@ -220,7 +223,8 @@ def test_report_covers_only_the_measured_account_inside_the_period():
 
 def test_checks_use_the_call_before_the_period_without_counting_it():
     since = 10_000.0
-    events = [_ev(since - 30, w5=20_000, stream="agent-1"), _ev(since + 10, w5=200_000, read=18_000, stream="agent-1"),
+    events = [_ev(since - 2000, w5=20_000, stream="agent-3"), _ev(since - 1000, w5=200_000, read=18_000, stream="agent-3"),
+              _ev(since - 30, w5=20_000, stream="agent-1"), _ev(since + 10, w5=200_000, read=18_000, stream="agent-1"),
               _ev(since - 600, w5=20_000, stream="agent-2"), _ev(since + 10, w5=200_000, read=18_000, stream="agent-2"),
               _ev(since - 50 * 60, out=1)]
     (stuck,) = checks.stuck_subagent_cache(events, since)
