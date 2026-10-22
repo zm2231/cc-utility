@@ -3,10 +3,16 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import nnls
 
-from .load import FAMILIES, WEEK
+from .load import WEEK, Event
 from .windows import COLUMNS, Window
 
 API_WEIGHTS = {"fresh": 1.0, "write_5m": 1.25, "write_1h": 2.0, "output": 5.0}
+
+
+def api_equivalent(e: Event, rho: float = 0.0) -> float:
+    """Tokens of one call in fresh-input units at the API price ratios, with cache reads at `rho`."""
+    return (e.fresh + API_WEIGHTS["write_5m"] * e.write_5m + API_WEIGHTS["write_1h"] * e.write_1h + rho * e.read
+            + API_WEIGHTS["output"] * e.output)
 RHO_GRID = np.round(np.linspace(0, 0.5, 101), 4)
 I = {c: i for i, c in enumerate(COLUMNS)}
 
@@ -16,7 +22,7 @@ def _write_equiv(t: np.ndarray) -> float:
 
 
 def active_families(windows: list[Window]) -> list[str]:
-    return [f for f in FAMILIES if any(w.tokens[f].sum() > 0 for w in windows)]
+    return sorted({f for w in windows for f, t in w.tokens.items() if t.sum() > 0})
 
 
 def design(windows: list[Window], rho: float, families: list[str]) -> np.ndarray:

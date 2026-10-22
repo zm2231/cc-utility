@@ -1,6 +1,7 @@
 import json
+import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -31,10 +32,23 @@ class Event:
     read: int
     output: int
     markers: frozenset[str] = frozenset()
+    version: str = ""
+    entrypoint: str = ""
 
     @property
     def family(self) -> str | None:
         return next((f for f in FAMILIES if f in self.model), None)
+
+    @property
+    def model_id(self) -> str | None:
+        """The model without the `claude-` prefix or a date suffix, e.g. `opus-5-5`; None for non-Claude models."""
+        if self.family is None:
+            return None
+        return re.sub(r"-\d{8}$", "", self.model.removeprefix("claude-"))
+
+    @property
+    def is_subagent(self) -> bool:
+        return not self.session_id.startswith(PROXY_PREFIX) and self.stream != "main"
 
     @property
     def context(self) -> int:
@@ -112,6 +126,7 @@ def load_events(*projects_dirs: Path) -> list[Event]:
         session_id, stream = _stream_of(path)
         pending: set[str] = set()
         marked: dict[str, frozenset[str]] = {}
+        entrypoint = ""
         with path.open(errors="ignore") as fh:
             for line in fh:
                 if '"usage"' not in line and '"attachment"' not in line and '"system"' not in line:
@@ -122,6 +137,7 @@ def load_events(*projects_dirs: Path) -> list[Event]:
                     continue
                 if not isinstance(d, dict):
                     continue
+                entrypoint = entrypoint or d.get("entrypoint") or ""
                 msg = d.get("message")
                 if not isinstance(msg, dict) or not msg.get("usage"):
                     m = _marker(d)
@@ -146,7 +162,7 @@ def load_events(*projects_dirs: Path) -> list[Event]:
                     parse_ts(d["timestamp"]), session_id, stream, model,
                     u.get("input_tokens") or 0, w5m, w1h,
                     u.get("cache_read_input_tokens") or 0, u.get("output_tokens") or 0,
-                    marked[msg["id"]],
+                    marked[msg["id"]], d.get("version") or "", entrypoint,
                 )
                 prev = best.get(msg["id"])
                 if prev is None or ev.output > prev.output:
@@ -171,3 +187,59 @@ def load_proxy_events(paths: list[Path], primary_email: str | None) -> tuple[lis
                     r["input_tokens"], r["write_5m"], r["write_1h"], r["cache_read_input_tokens"], r["output_tokens"],
                 ))
     return sorted(events, key=lambda e: e.ts), accounts
+
+
+@dataclass
+class Compaction:
+    ts: float
+    pre_tokens: int
+    post_tokens: int
+
+
+@dataclass
+class Session:
+    prompts: list[float] = field(default_factory=list)
+    compactions: list[Compaction] = field(default_factory=list)
+
+
+_NOT_TYPED = ("<local-command", "<command-", "<bash-", "<task-notification", "<system-reminder", "Caveat:",
+              "[Request interrupted")
+
+
+def _typed_prompt(d: dict) -> bool:
+    """A message the person typed, as opposed to tool results, hook output, command echoes or compaction summaries."""
+    if d.get("type") != "user" or d.get("isMeta") or d.get("isSidechain") or d.get("isCompactSummary"):
+        return False
+    content = (d.get("message") or {}).get("content")
+    if isinstance(content, list):
+        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+            return False
+        content = " ".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    return isinstance(content, str) and bool(content.strip()) and not content.strip().startswith(_NOT_TYPED)
+
+
+def load_sessions(*projects_dirs: Path) -> dict[str, Session]:
+    """Typed prompts and compactions of each main transcript, keyed like `Event.session_id`."""
+    out: dict[str, Session] = {}
+    for path in (p for d in projects_dirs for p in d.glob("*/*.jsonl")):
+        s = out.setdefault(path.stem, Session())
+        with path.open(errors="ignore") as fh:
+            for line in fh:
+                if '"user"' not in line and '"compact_boundary"' not in line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(d, dict) or "timestamp" not in d:
+                    continue
+                if d.get("type") == "system" and d.get("subtype") == "compact_boundary":
+                    meta = d.get("compactMetadata") or {}
+                    s.compactions.append(Compaction(parse_ts(d["timestamp"]), meta.get("preTokens") or 0,
+                                                    meta.get("postTokens") or 0))
+                elif _typed_prompt(d):
+                    s.prompts.append(parse_ts(d["timestamp"]))
+    for s in out.values():
+        s.prompts.sort()
+        s.compactions.sort(key=lambda c: c.ts)
+    return out

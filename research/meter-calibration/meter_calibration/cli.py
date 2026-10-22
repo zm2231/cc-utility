@@ -1,16 +1,18 @@
 import argparse
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 
-from . import capacity, fit, rewrites
+from . import capacity, fit, report, rewrites
 from .load import (
     Event,
     Render,
     load_events,
     load_proxy_events,
     load_renders,
+    load_sessions,
     tag_accounts,
 )
 from .windows import COLUMNS, FIVE_HOURS, five_hour_windows
@@ -124,7 +126,7 @@ def select_period(renders: list[Render], events: list[Event], since: float, unti
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("calibrate", "capacity", "rewrites", "all"))
+    p.add_argument("command", choices=("calibrate", "capacity", "rewrites", "all", "report"))
     p.add_argument("--sidecar", type=Path, default=Path.home() / ".cc-utility" / "sidecar-log.jsonl")
     p.add_argument("--projects", type=Path, action="append",
                    help="Claude Code projects dir; repeat for each config dir (default ~/.claude/projects)")
@@ -134,9 +136,14 @@ def main() -> None:
     p.add_argument("--since", type=_utc_date, required=True, help="UTC date, inclusive (YYYY-MM-DD)")
     p.add_argument("--until", type=_utc_date, required=True, help="UTC date, exclusive (YYYY-MM-DD)")
     p.add_argument("--boot", type=int, default=200)
+    p.add_argument("--breaks", type=_utc_date, action="append", default=[],
+                   help="UTC date at which `report` splits the period for before/after comparisons; repeatable")
+    p.add_argument("--out", type=Path, help="where `report` writes its JSON")
     args = p.parse_args()
     if args.since >= args.until:
         p.error("--since must be before --until")
+    if args.command == "report" and not args.out:
+        p.error("report needs --out")
 
     projects = args.projects or [Path.home() / ".claude" / "projects"]
     if args.proxy_usage and not args.primary_email:
@@ -169,6 +176,11 @@ def main() -> None:
             p.error(str(e))
     if args.command in ("rewrites", "all"):
         rewrite_report(events, accounts, windows)
+    if args.command == "report":
+        data = report.build(renders, events, load_sessions(*projects), primary, accounts, args.since, args.until,
+                            args.breaks, args.boot)
+        args.out.write_text(json.dumps(data, default=float))
+        print(f"wrote {args.out}")
 
 
 if __name__ == "__main__":

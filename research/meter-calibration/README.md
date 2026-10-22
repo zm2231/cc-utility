@@ -42,7 +42,11 @@ uv run pytest
 ```
 
 Commands: `calibrate` (token weights and checks), `capacity` (tokens per 5h
-window and per week), `rewrites` (where cache writes come from), `all`.
+window and per week), `rewrites` (where cache writes come from), `all`, and
+`report --out report.json [--breaks YYYY-MM-DD ...]`, which writes every
+measurement below as JSON for charts, split at each `--breaks` date for
+before/after comparisons. Accounts in the report are labelled A, B, ... with A
+the measured one; it contains no emails, session ids or prompt text.
 
 ## Method
 
@@ -81,6 +85,18 @@ window and per week), `rewrites` (where cache writes come from), `all`.
    change; otherwise unexplained. For the unexplained rest the CLI lists which
    markers preceded it. Markers show what happened before a miss, not proof it
    caused it.
+
+6. **Report checks.** Meter rates are fitted per model as well as per family,
+   and also read directly from windows where one model supplied at least 85%
+   of the tokens, which needs no fit. Weekly % per 5h % is compared across the
+   `--breaks` segments, and each day's weekly gain against the gain its tokens
+   predict. Work per typed prompt (calls, subagents, tokens, minutes) covers
+   everything up to the next prompt. Further checks: mid-cycle weekly resets;
+   the 5-minute share of cache writes per day for main sessions and subagents;
+   subagent rewrites within 5 minutes of the previous call (cache not reused)
+   versus after a longer pause (5-minute cache expired); 5h rises with no
+   logged call; compactions after about an hour of quiet (idle compaction);
+   headless (`claude -p`, SDK) against interactive rates.
 
 ## Limits
 

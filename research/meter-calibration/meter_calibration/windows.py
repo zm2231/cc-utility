@@ -1,9 +1,11 @@
 import bisect
+from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from .load import FAMILIES, Event, Render, weekly_phase
+from .load import Event, Render, weekly_phase
 
 FIVE_HOURS = 5 * 3600
 COLUMNS = ("fresh", "write_5m", "write_1h", "read", "output")
@@ -15,7 +17,7 @@ class Window:
     pct: float
     renders: int
     observed_at: float = 0.0
-    tokens: dict[str, np.ndarray] = field(default_factory=lambda: {f: np.zeros(len(COLUMNS)) for f in FAMILIES})
+    tokens: defaultdict[str, np.ndarray] = field(default_factory=lambda: defaultdict(lambda: np.zeros(len(COLUMNS))))
 
     def total(self, column: str) -> float:
         i = COLUMNS.index(column)
@@ -29,9 +31,11 @@ def five_hour_windows(
     accounts: dict[str, str],
     include_unknown: bool = False,
     min_renders: int = 5,
+    group: Callable[[Event], str | None] = lambda e: e.family,
 ) -> list[Window]:
     """A window's usage is the highest 5h % a primary-account render reported for that reset, and only events up to the
-    last render showing that % can be reflected in it."""
+    last render showing that % can be reflected in it. `group` names the token pool each event's meter scale is fitted
+    for: the model family by default, or e.g. `lambda e: e.model_id` to fit each model separately."""
     by_reset: dict[int, Window] = {}
     for r in renders:
         if weekly_phase(r.seven_day_reset) != primary_phase or accounts.get(r.session_id) != "primary":
@@ -50,8 +54,9 @@ def five_hour_windows(
         lo, hi = bisect.bisect_left(times, w.end - FIVE_HOURS), bisect.bisect_right(times, w.observed_at)
         for e in events[lo:hi]:
             acct = accounts.get(e.session_id)
-            if acct == "other" or (acct is None and not include_unknown) or e.family is None:
+            key = group(e)
+            if acct == "other" or (acct is None and not include_unknown) or key is None:
                 continue
-            w.tokens[e.family] += (e.fresh, e.write_5m, e.write_1h, e.read, e.output)
+            w.tokens[key] += (e.fresh, e.write_5m, e.write_1h, e.read, e.output)
         out.append(w)
     return out
