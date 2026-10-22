@@ -46,7 +46,10 @@ window and per week), `rewrites` (where cache writes come from), `all`, and
 `report --out report.json [--breaks YYYY-MM-DD ...]`, which writes every
 measurement below as JSON for charts, split at each `--breaks` date for
 before/after comparisons. Accounts in the report are labelled A, B, ... with A
-the measured one; it contains no emails, session ids or prompt text.
+the measured one; it contains no emails, session ids or prompt text. Its
+`five_hour_windows` carry each window's tokens per model from `start` (5 hours
+before the reset) to the reading that set its %, so the first windows reach up
+to 5 hours before `--since`; every other section stays inside the period.
 
 ## Method
 

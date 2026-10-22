@@ -181,6 +181,7 @@ def test_cli_report_writes_json(tmp_path, monkeypatch, capsys):
     assert set(data["rates"]["by_model"]) == {"opus-5-5"}
     assert sum(d["prompts"] for d in data["daily"]) == 40
     first = data["five_hour_windows"][0]
+    assert all(w["end"] - w["start"] == 5 * 3600 for w in data["five_hour_windows"])
     assert data["token_columns"] == ["fresh", "write_5m", "write_1h", "read", "output"]
     assert first["tokens"] == {"opus-5-5": [0.1, 0.0, 0.0, 0.0, 0.005]}
 

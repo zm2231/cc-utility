@@ -8,7 +8,7 @@ from . import checks, fit
 from .fit import api_equivalent
 from .load import WEEK, Event, Render, Session, weekly_phase
 from .turns import Turn, turns
-from .windows import COLUMNS, Window, five_hour_windows
+from .windows import COLUMNS, FIVE_HOURS, Window, five_hour_windows
 
 
 def _day(ts: float) -> str:
@@ -72,7 +72,7 @@ def build(renders: list[Render], events: list[Event], sessions: dict[str, Sessio
         "daily": _daily(renders, measured, all_turns, labels),
         "resets": [{"account": labels.get(r["phase"], "?"), **{k: v for k, v in r.items() if k != "phase"}}
                    for r in checks.off_schedule_resets(renders)],
-        "five_hour_windows": [{"end": w.end, "pct": w.pct, "observed_at": w.observed_at, "renders": w.renders,
+        "five_hour_windows": [{"start": w.end - FIVE_HOURS, "end": w.end, "pct": w.pct, "observed_at": w.observed_at, "renders": w.renders,
                                "tokens": {g: [float(v) / 1e6 for v in t] for g, t in w.tokens.items() if t.sum() > 0}}
                               for w in model_windows],
         "token_columns": list(COLUMNS),
